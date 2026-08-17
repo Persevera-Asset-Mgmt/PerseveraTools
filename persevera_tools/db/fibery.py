@@ -3,7 +3,7 @@ import time
 import requests
 import logging
 import pandas as pd
-from typing import List, Dict, Any, Optional, Tuple, Callable
+from typing import List, Dict, Any, Optional, Sequence, Tuple, Callable
 
 from ..config import settings
 from ..utils.logging import get_logger
@@ -403,6 +403,77 @@ def _build_field_selection(
                 selection[alias] = [field_name, name_field]
     
     return selection
+
+def _field_local_name(field_name: str) -> str:
+    """Returns the local alias used as the DataFrame column name."""
+    return field_name.rsplit("/", 1)[-1]
+
+
+def _resolve_fields_allowlist(
+    all_fields: Dict[str, Dict],
+    fields: Sequence[str],
+) -> Dict[str, Dict]:
+    """
+    Resolves an allowlist of field names against the table schema.
+
+    Each entry may be a canonical path (``Inv-Taxonomia/Name``) or a local
+    alias (``Name``). Returns matched fields in request order.
+
+    Raises:
+        ValueError: If ``fields`` is empty, a name is unknown, or an alias
+            matches more than one canonical field.
+    """
+    if isinstance(fields, str):
+        raise ValueError("fields must be a sequence of field names, not a string.")
+    requested = [name.strip() for name in fields]
+    if not requested or any(not name for name in requested):
+        raise ValueError("fields must be a non-empty sequence of field names.")
+
+    alias_index: Dict[str, List[str]] = {}
+    for field_name in all_fields:
+        alias_index.setdefault(_field_local_name(field_name), []).append(field_name)
+
+    matched: Dict[str, Dict] = {}
+    unknown: List[str] = []
+    ambiguous: List[str] = []
+    seen: set[str] = set()
+
+    for name in requested:
+        if name in seen:
+            continue
+        seen.add(name)
+
+        if name in all_fields:
+            matched[name] = all_fields[name]
+            continue
+
+        candidates = alias_index.get(name, [])
+        if len(candidates) == 1:
+            field_name = candidates[0]
+            matched[field_name] = all_fields[field_name]
+        elif len(candidates) > 1:
+            ambiguous.append(f"{name!r} matches {candidates}")
+        else:
+            unknown.append(name)
+
+    problems: List[str] = []
+    if unknown:
+        problems.append(f"unknown field(s): {unknown}")
+    if ambiguous:
+        problems.append(
+            "ambiguous field(s) (use a canonical path such as 'Space/Field'): "
+            + "; ".join(ambiguous)
+        )
+    if problems:
+        available = sorted({_field_local_name(name) for name in all_fields})
+        raise ValueError(
+            "Could not resolve fields allowlist: "
+            + "; ".join(problems)
+            + f". Available aliases: {available}"
+        )
+
+    return matched
+
 
 def _field_selection_matches_field(spec: Any, field_name: str) -> bool:
     """Returns True when a q/select entry targets the given canonical field path."""
@@ -864,6 +935,7 @@ def read_fibery(
     page_size: int = 1000,
     min_page_size: int = MIN_PAGE_SIZE,
     allow_partial: bool = False,
+    fields: Optional[Sequence[str]] = None,
 ) -> pd.DataFrame:
     """
     Reads all data from a Fibery table and returns it as a pandas DataFrame.
@@ -873,6 +945,7 @@ def read_fibery(
     Args:
         table_name: The display name of the Fibery table to read.
         include_fibery_fields: Whether to include Fibery system fields (created-by, rank, etc.).
+            Ignored when ``fields`` is provided: the allowlist is the source of truth.
         resolve_rich_text: Whether to fetch and expand rich-text fields into plain content.
         rich_text_format: Document format for rich-text resolution (plain-text, md, html).
         where_filter: Optional filter condition using Fibery's q/where syntax.
@@ -886,16 +959,24 @@ def read_fibery(
         allow_partial: If ``False`` (default), raises when pagination fails mid-way
             (e.g. persistent timeout) instead of returning an incomplete DataFrame.
             Set to ``True`` only when partial results are acceptable.
+        fields: Optional allowlist of fields to fetch. Each entry may be a canonical
+            path (``Inv-Taxonomia/Name``) or a local alias (``Name``). ``None``
+            (default) fetches every eligible field. Use this on heavy tables to
+            avoid timeouts from unused relations, collections, and formulas.
 
     Returns:
         A pandas DataFrame with the table data.
 
     Example:
         df = read_fibery(
-            "Inv-Asset Allocation/Posição",
-            where_filter=[">=", ["Inv-Asset Allocation/Data Posição"], "$dataRecente"],
-            params={"$dataRecente": "2026-01-01T00:00:00Z"},
-            page_size=500,
+            "Inv-Taxonomia/Ativos",
+            fields=["Name", "Classificação Denominação", "Classificação Instrumento"],
+            where_filter=[
+                "=",
+                ["Inv-Taxonomia/Classificação Instrumento", "Inv-Taxonomia/Name"],
+                "$instrument",
+            ],
+            params={"$instrument": "Ação"},
         )
     """
     schema_result = _get_db_schema()
@@ -911,15 +992,18 @@ def read_fibery(
     canonical_name = table_meta["canonical_name"]
     all_fields = table_meta["fields"]
 
-    str_to_remove = ["_deleted", "Collaboration", "Description", "comments/comments"]
-    if not include_fibery_fields:
-        str_to_remove.extend(["fibery/created-by", "fibery/rank", "created-by"])
+    if fields is not None:
+        fields_to_query = _resolve_fields_allowlist(all_fields, fields)
+    else:
+        str_to_remove = ["_deleted", "Collaboration", "Description", "comments/comments"]
+        if not include_fibery_fields:
+            str_to_remove.extend(["fibery/created-by", "fibery/rank", "created-by"])
 
-    fields_to_query = {
-        field_name: field_info
-        for field_name, field_info in all_fields.items()
-        if not any(s in field_name for s in str_to_remove)
-    }
+        fields_to_query = {
+            field_name: field_info
+            for field_name, field_info in all_fields.items()
+            if not any(s in field_name for s in str_to_remove)
+        }
     rich_text_aliases = [
         field_name.split("/")[-1]
         for field_name, field_info in fields_to_query.items()
@@ -944,7 +1028,10 @@ def read_fibery(
         )
         min_page_size = page_size
 
-    logger.info(f"Reading data from Fibery table: {canonical_name} (page_size={page_size})")
+    logger.info(
+        f"Reading data from Fibery table: {canonical_name} "
+        f"(page_size={page_size}, fields={len(fields_to_query)})"
+    )
 
     api_url = _get_fibery_api_url("commands")
     headers = _get_fibery_headers()

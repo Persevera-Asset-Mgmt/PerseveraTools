@@ -19,6 +19,7 @@ from .anbima_feed import AnbimaFeedProvider, AnbimaFundosProvider
 from .ws_xp import XPWSProvider
 from .ws_btg import BTGWSProvider
 from .xp_hub import XPHubProvider
+from .opea import OpeaProvider
 # from .ws_ibkr import IBKRWebProvider
 
 
@@ -32,5 +33,6 @@ __all__ = [
     'ComdinheiroProvider', 'BcbFocusProvider', 'KraneSharesProvider', 'InvestingComProvider',
     'DebenturesComProvider', 'MDICProvider', 'B3Provider', 'InvestfyProvider',
     'AnbimaFeedProvider', 'AnbimaFundosProvider', 'XPWSProvider', 'XPHubProvider', 'BTGWSProvider',
+    'OpeaProvider',
     #'IBKRWebProvider',
 ]
