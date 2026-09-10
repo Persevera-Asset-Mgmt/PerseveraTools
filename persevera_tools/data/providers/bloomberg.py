@@ -101,7 +101,7 @@ def _map_bloomberg_fields(series: pd.Series, field_list: Dict[str, str]) -> pd.S
 
 DataCategory = Literal[
     # Market data categories
-    'Atividade Bancária', 'CFTC', 'Commodity', 'Comérico', 'Crédito', 'Dívida', 'Equity', 'Futuros', 'Governo', 'Inflação', 'Macro', 'Moedas', 'Monetário', 'Setor Externo', 'Taxas', 'Trabalho', 'Varejo', 'Índices',
+    'Atividade Bancária', 'Ativos Offshore', 'CFTC', 'Commodity', 'Comérico', 'Crédito', 'Dívida', 'Equity', 'Futuros', 'Governo', 'Inflação', 'Macro', 'Moedas', 'Monetário', 'Setor Externo', 'Taxas', 'Trabalho', 'Varejo', 'Índices',
     # Company data categories
     'Valuation', 'Breadth', 'Opções', 'index_weight'
 ]
@@ -118,6 +118,11 @@ class BloombergProvider(DataProvider):
         'Diário': 'daily',
         'Trimestral': 'quarterly',
         'Consenso': 'consensus',
+    }
+
+    _DEFAULT_MARKET_FIELDS = {'PX_LAST': 'close'}
+    _CATEGORY_EXTRA_MARKET_FIELDS: Dict[str, Dict[str, str]] = {
+        'Ativos Offshore': {'PX_DIRTY_MID': 'dirty_mid_price'},
     }
     
     def __init__(
@@ -430,8 +435,11 @@ class BloombergProvider(DataProvider):
             df['field'] = _map_bloomberg_fields(df['field'], field_list)
             df = df.drop(columns='code_bloomberg')
         else:
-            field_mapping = {'PX_LAST': 'close'}
-            
+            field_mapping = {
+                **self._DEFAULT_MARKET_FIELDS,
+                **self._CATEGORY_EXTRA_MARKET_FIELDS.get(category, {}),
+            }
+
             raw = _bdh(
                 tickers=list(securities_list.keys()),
                 flds=list(field_mapping.keys()),
