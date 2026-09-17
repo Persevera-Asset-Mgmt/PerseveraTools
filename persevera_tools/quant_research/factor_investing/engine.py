@@ -18,6 +18,7 @@ from .result import (
     BacktestDiagnostics,
     BacktestResult,
     build_summary,
+    summarize_costs,
     summarize_diagnostics,
 )
 from .scoring import calculate_factor_exposure, snapshot_components, snapshot_series
@@ -94,15 +95,31 @@ def _daily_portfolio_return(
     return float((w_adj * rets).sum()), events
 
 
+def _traded_notional(prev_w: Optional[pd.Series], curr_w: pd.Series) -> float:
+    """Two-way traded notional as a fraction of NAV: ``sum(|Δw|)``.
+
+    Missing previous book (first rebalance) is treated as a deployment from
+    cash, so this equals ``sum(|curr_w|)``.
+    """
+    curr = (
+        curr_w.fillna(0.0)
+        if curr_w is not None and not curr_w.empty
+        else pd.Series(dtype=float)
+    )
+    if prev_w is None or prev_w.empty:
+        return float(curr.abs().sum())
+    aligned = pd.concat(
+        [prev_w.fillna(0.0).rename("prev"), curr.rename("curr")],
+        axis=1,
+    ).fillna(0.0)
+    return float((aligned["curr"] - aligned["prev"]).abs().sum())
+
+
 def _turnover(prev_w: Optional[pd.Series], curr_w: pd.Series) -> float:
     """One-way turnover = 0.5 * sum(|Δw|)."""
     if prev_w is None or prev_w.empty:
         return float("nan")
-    aligned = pd.concat(
-        [prev_w.fillna(0.0).rename("prev"), curr_w.fillna(0.0).rename("curr")],
-        axis=1,
-    ).fillna(0.0)
-    return float(0.5 * (aligned["curr"] - aligned["prev"]).abs().sum())
+    return 0.5 * _traded_notional(prev_w, curr_w)
 
 
 def _rebal_row(
@@ -119,6 +136,7 @@ def _rebal_row(
 
     n_universe = int(len(universe))
     missing_all = cross.reindex(universe).isna().all(axis=1)
+    traded = _traded_notional(prev_weights, weights)
     row: dict[str, Any] = {
         "date": dt,
         "n_universe": n_universe,
@@ -127,6 +145,8 @@ def _rebal_row(
         "n_short": int((weights < 0).sum()),
         "n_missing_components": int(missing_all.sum()) if n_universe else 0,
         "turnover": _turnover(prev_weights, weights),
+        "traded_notional": traded,
+        "trading_cost": traded * float(payload.get("trading_cost_bps", 0.0)) / 10_000.0,
     }
     cross_u = cross.reindex(universe)
     for comp in components:
@@ -219,6 +239,7 @@ def _form_rebalance_books(
                     "weights": weights,
                     "components": components,
                     "prev_weights": prev_weights,
+                    "trading_cost_bps": config.trading_cost_bps,
                 },
             )
         )
@@ -253,38 +274,61 @@ def _simulate_holdings_pnl(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     initial_nav: float,
-) -> tuple[pd.Series, pd.Series, list[dict[str, Any]], int, int]:
-    """Simulate daily P&L from rebalance weights; return nav/returns/events/counters."""
+    borrow_rate: float = 0.0,
+    trading_cost_by_date: Optional[Mapping[Any, float]] = None,
+) -> tuple[pd.Series, pd.Series, pd.DataFrame, list[dict[str, Any]], int, int]:
+    """Simulate daily P&L from rebalance weights; return nav/returns/costs/events/counters."""
     trading_index = prices.index[(prices.index >= start_date) & (prices.index <= end_date)]
     daily_weights = weights_df.reindex(trading_index).ffill()
     asset_returns = prices.pct_change(fill_method=None)
+    cost_map = {
+        pd.Timestamp(k).normalize(): float(v)
+        for k, v in dict(trading_cost_by_date or {}).items()
+        if v is not None and pd.notna(v)
+    }
 
     strategy_returns = pd.Series(index=trading_index, dtype=float, name="strategy_return")
+    trading_costs = pd.Series(0.0, index=trading_index, dtype=float, name="trading_cost")
+    borrow_costs = pd.Series(0.0, index=trading_index, dtype=float, name="borrow_cost")
     event_rows: list[dict[str, Any]] = []
     n_days_holdings = 0
     n_days_renorm = 0
 
     for dt in trading_index:
         pos = trading_index.get_loc(dt)
-        if not isinstance(pos, int) or pos == 0:
-            strategy_returns.loc[dt] = float("nan")
-            continue
-        w = daily_weights.loc[trading_index[pos - 1]]
-        if not isinstance(w, pd.Series):
-            continue
-        w = w[w.notna() & (w != 0.0)]
-        if w.empty:
-            strategy_returns.loc[dt] = float("nan")
-            continue
+        dt_norm = pd.Timestamp(dt).normalize()
+        trading_cost = float(cost_map.get(dt_norm, 0.0))
 
-        n_days_holdings += 1
-        port_ret, day_events = _daily_portfolio_return(
-            w, asset_returns.loc[dt], as_of=dt
-        )
-        strategy_returns.loc[dt] = port_ret
-        if any(e["event"] == "renorm" for e in day_events):
-            n_days_renorm += 1
-        event_rows.extend(day_events)
+        w = pd.Series(dtype=float)
+        if isinstance(pos, int) and pos > 0:
+            w_raw = daily_weights.loc[trading_index[pos - 1]]
+            if isinstance(w_raw, pd.Series):
+                w = w_raw[w_raw.notna() & (w_raw != 0.0)]
+
+        borrow_cost = 0.0
+        port_ret = float("nan")
+        if not w.empty:
+            n_days_holdings += 1
+            port_ret, day_events = _daily_portfolio_return(
+                w, asset_returns.loc[dt], as_of=dt
+            )
+            if any(e["event"] == "renorm" for e in day_events):
+                n_days_renorm += 1
+            event_rows.extend(day_events)
+            if borrow_rate:
+                short_leg = w[w < 0]
+                if not short_leg.empty:
+                    borrow_cost = float((-short_leg).sum()) * float(borrow_rate) / 252.0
+
+        if pd.isna(port_ret):
+            if w.empty and trading_cost == 0.0:
+                strategy_returns.loc[dt] = float("nan")
+                continue
+            port_ret = 0.0
+
+        trading_costs.loc[dt] = trading_cost
+        borrow_costs.loc[dt] = borrow_cost
+        strategy_returns.loc[dt] = float(port_ret) - trading_cost - borrow_cost
 
     first_valid = strategy_returns.first_valid_index()
     if first_valid is not None:
@@ -295,12 +339,45 @@ def _simulate_holdings_pnl(
     else:
         nav = pd.Series(dtype=float, index=trading_index)
     nav.name = "nav"
-    return nav, strategy_returns, event_rows, n_days_holdings, n_days_renorm
+    costs_df = pd.DataFrame(
+        {"trading_cost": trading_costs, "borrow_cost": borrow_costs}
+    )
+    costs_df.index.name = "date"
+    return nav, strategy_returns, costs_df, event_rows, n_days_holdings, n_days_renorm
+
+
+def _gross_nav_from_net(
+    net_returns: pd.Series,
+    costs_df: pd.DataFrame,
+    *,
+    initial_nav: float,
+) -> pd.Series:
+    """Rebuild a cost-free NAV by adding daily trading and borrow drag back."""
+    first_valid = net_returns.first_valid_index()
+    if first_valid is None:
+        return pd.Series(dtype=float, name="gross_nav")
+
+    trading = (
+        costs_df["trading_cost"].reindex(net_returns.index).fillna(0.0)
+        if not costs_df.empty and "trading_cost" in costs_df.columns
+        else 0.0
+    )
+    borrow = (
+        costs_df["borrow_cost"].reindex(net_returns.index).fillna(0.0)
+        if not costs_df.empty and "borrow_cost" in costs_df.columns
+        else 0.0
+    )
+    gross = (net_returns.fillna(0.0) + trading + borrow).loc[first_valid:]
+    nav = (1.0 + gross.fillna(0.0)).cumprod() * initial_nav
+    nav = nav.reindex(net_returns.index)
+    nav.name = "gross_nav"
+    return nav
 
 
 def _build_diagnostics(
     rebals_df: pd.DataFrame,
     event_rows: list[dict[str, Any]],
+    costs_df: pd.DataFrame,
     *,
     n_days_holdings: int,
     n_days_renorm: int,
@@ -310,7 +387,9 @@ def _build_diagnostics(
         events_df["date"] = pd.to_datetime(events_df["date"])
         events_df = events_df.sort_values(["date", "event", "code"]).reset_index(drop=True)
 
-    diagnostics = BacktestDiagnostics(rebals=rebals_df, events=events_df)
+    diagnostics = BacktestDiagnostics(
+        rebals=rebals_df, events=events_df, costs=costs_df
+    )
     diag_summary = summarize_diagnostics(diagnostics)
     if n_days_holdings > 0:
         diag_summary["pct_days_with_renorm"] = float(n_days_renorm / n_days_holdings)
@@ -326,6 +405,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     2. Load historical ``factor_zoo`` panels via ``get_descriptors``
     3. On each rebalance date: ADTV filter → PIT snapshot → score → weights
     4. Hold weights until the next rebalance; compute daily P&L from ``price_field``
+    5. Debit trading costs on rebalance closes and borrow on overnight shorts
     """
     definitions = load_factor_definitions()
     components = resolve_component_names(
@@ -358,18 +438,25 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         components=components,
         higher_is_better=higher_is_better,
     )
-    nav, strategy_returns, hold_events, n_days_holdings, n_days_renorm = (
+    nav, strategy_returns, costs_df, hold_events, n_days_holdings, n_days_renorm = (
         _simulate_holdings_pnl(
             prices=prices,
             weights_df=weights_df,
             start_date=config.start_date,
             end_date=config.end_date,
             initial_nav=config.initial_nav,
+            borrow_rate=config.borrow_rate,
+            trading_cost_by_date=(
+                rebals_df["trading_cost"].to_dict()
+                if not rebals_df.empty and "trading_cost" in rebals_df.columns
+                else None
+            ),
         )
     )
     diagnostics, diag_summary = _build_diagnostics(
         rebals_df,
         rebal_events + hold_events,
+        costs_df,
         n_days_holdings=n_days_holdings,
         n_days_renorm=n_days_renorm,
     )
@@ -386,9 +473,21 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             "top_n": config.top_n,
             "adtv_min": config.adtv_min,
             "denomination": config.denomination,
+            "trading_cost_bps": config.trading_cost_bps,
+            "borrow_rate": config.borrow_rate,
         }
     )
     summary.update(diag_summary)
+    n_obs = int(summary.get("n_obs") or 0)
+    summary.update(summarize_costs(costs_df, n_obs=n_obs))
+    gross_nav = _gross_nav_from_net(
+        strategy_returns, costs_df, initial_nav=config.initial_nav
+    )
+    if not gross_nav.empty:
+        gross_stats = build_summary(gross_nav.dropna(), risk_free_rate=config.risk_free_rate)
+        summary["gross_annualized_return"] = gross_stats["annualized_return"]
+    else:
+        summary["gross_annualized_return"] = float("nan")
 
     return BacktestResult(
         nav=nav,

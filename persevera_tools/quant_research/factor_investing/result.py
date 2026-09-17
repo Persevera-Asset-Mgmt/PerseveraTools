@@ -25,10 +25,14 @@ class BacktestDiagnostics:
     ``events``
         Sparse event log (``price_gap``, ``renorm``, ``dropped_at_rebal``) with
         columns ``date``, ``code``, ``event``, ``detail``.
+    ``costs``
+        Daily cost drag as a fraction of NAV, indexed by date, with columns
+        ``trading_cost`` and ``borrow_cost``.
     """
 
     rebals: pd.DataFrame = field(default_factory=pd.DataFrame)
     events: pd.DataFrame = field(default_factory=pd.DataFrame)
+    costs: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def __repr__(self) -> str:
         n_rebals = len(self.rebals)
@@ -104,6 +108,7 @@ def summarize_diagnostics(diagnostics: BacktestDiagnostics) -> dict[str, Any]:
         out["n_renorm_events"] = int(counts.get("renorm", 0))
         out["n_dropped_at_rebal_events"] = int(counts.get("dropped_at_rebal", 0))
 
+    out.update(summarize_costs(diagnostics.costs))
     if rebals.empty:
         return out
     n_long = rebals["n_long"] if "n_long" in rebals.columns else 0
@@ -113,4 +118,39 @@ def summarize_diagnostics(diagnostics: BacktestDiagnostics) -> dict[str, Any]:
         out["avg_names"] = float(names.mean())
     if "turnover" in rebals.columns:
         out["avg_turnover"] = float(rebals["turnover"].mean())
+    return out
+
+
+def summarize_costs(
+    costs: pd.DataFrame,
+    *,
+    n_obs: int = 0,
+) -> dict[str, Any]:
+    """Aggregate trading/borrow drag for ``BacktestResult.summary``."""
+    out: dict[str, Any] = {
+        "total_trading_cost": 0.0,
+        "total_borrow_cost": 0.0,
+        "total_cost_drag": 0.0,
+        "ann_trading_drag": float("nan"),
+        "ann_borrow_drag": float("nan"),
+    }
+    if costs is None or costs.empty:
+        return out
+
+    trading = (
+        float(costs["trading_cost"].fillna(0.0).sum())
+        if "trading_cost" in costs.columns
+        else 0.0
+    )
+    borrow = (
+        float(costs["borrow_cost"].fillna(0.0).sum())
+        if "borrow_cost" in costs.columns
+        else 0.0
+    )
+    out["total_trading_cost"] = trading
+    out["total_borrow_cost"] = borrow
+    out["total_cost_drag"] = trading + borrow
+    if n_obs > 0:
+        out["ann_trading_drag"] = trading * 252.0 / int(n_obs)
+        out["ann_borrow_drag"] = borrow * 252.0 / int(n_obs)
     return out

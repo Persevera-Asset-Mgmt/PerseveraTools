@@ -15,6 +15,8 @@ Typical usage::
         construction="long_only",
         rebalance_freq="BME",
         adtv_min=8_000_000,
+        trading_cost_bps=10.0,
+        borrow_rate=0.0,
     )
     result = run_backtest(config)
     print(result.summary)

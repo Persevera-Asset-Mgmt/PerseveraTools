@@ -35,6 +35,14 @@ class BacktestConfig:
 
     Rebalance schedule: pass ``rebalance_freq`` (pandas offset alias such as
     ``"BME"`` / ``"W-FRI"``) or an explicit ``rebalance_dates`` list.
+
+    Costs (defaults 0 = cost-free NAV, backward compatible):
+      - ``trading_cost_bps`` is one-way, charged on two-way traded notional
+        ``sum(|Δw|)`` at the rebalance close, after the old book's daily P&L.
+        ``10`` means 10 bps of every currency unit bought or sold.
+      - ``borrow_rate`` is an annualized decimal (same convention as
+        ``risk_free_rate``), accrued daily as
+        ``short_gross * borrow_rate / 252``. Long-only is unaffected.
     """
 
     start_date: DateLike
@@ -58,6 +66,8 @@ class BacktestConfig:
     min_names: int = 10
     risk_free_rate: float = 0.0
     initial_nav: float = 1.0
+    trading_cost_bps: float = 0.0
+    borrow_rate: float = 0.0
 
     def __post_init__(self) -> None:
         self.start_date = _to_timestamp(self.start_date)
@@ -87,6 +97,10 @@ class BacktestConfig:
             raise ValueError("zR and zC must be positive")
         if self.initial_nav <= 0:
             raise ValueError("initial_nav must be positive")
+        if self.trading_cost_bps < 0:
+            raise ValueError("trading_cost_bps must be >= 0")
+        if self.borrow_rate < 0:
+            raise ValueError("borrow_rate must be >= 0")
         if not self.style and not self.components:
             raise ValueError("Provide style and/or components")
         if self.rebalance_dates is None and not self.rebalance_freq:
