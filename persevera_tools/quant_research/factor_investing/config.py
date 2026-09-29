@@ -27,8 +27,11 @@ class BacktestConfig:
     are set.
 
     Universe: candidate pool from Fibery ``Inv-Taxonomia/Ativos`` filtered by
-    ``denomination`` (default ``"BRL"``). On each rebalance the investable set is
-    ``adtv_field >= adtv_min`` (point-in-time). Pass ``codes`` to restrict further.
+    ``denomination`` (default ``"BRL"``). On each rebalance a name is investable
+    only when ``price_field`` is still printing after a forward-fill of at most
+    ``price_ffill_limit`` business days, and ``adtv_field >= adtv_min`` using an
+    ADTV print no older than that same limit. Factor components may keep their
+    last value with no age limit. Pass ``codes`` to restrict further.
 
     Selection: ``selection_mode="quantile"`` uses ``quantile`` (fraction per tail);
     ``selection_mode="top_n"`` uses a fixed ``top_n`` names per tail.

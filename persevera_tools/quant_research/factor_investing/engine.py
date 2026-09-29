@@ -177,16 +177,38 @@ def _dropped_at_rebal_events(
     ]
 
 
+def _traded_names(prices: pd.DataFrame, as_of: pd.Timestamp) -> pd.Index:
+    """Tickers with a price on the last session at or before ``as_of``.
+
+    ``prices`` is the densified close panel, already forward-filled for at most
+    ``price_ffill_limit`` business days. A name that stopped trading outside
+    that window is missing on this row.
+    """
+    if prices.empty:
+        return pd.Index([])
+    hist = prices.loc[:as_of]
+    if hist.empty:
+        return pd.Index([])
+    row = hist.iloc[-1]
+    return row[row.notna()].index
+
+
 def _form_rebalance_books(
     config: BacktestConfig,
     *,
     rebalance_dates: pd.DatetimeIndex,
     adtv_panel: pd.DataFrame,
     component_panel: pd.DataFrame,
+    prices: pd.DataFrame,
     components: tuple[str, ...],
     higher_is_better: Mapping[str, bool],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
-    """Form scores/weights and collect rebalance diagnostics + drop events."""
+    """Form scores/weights and collect rebalance diagnostics + drop events.
+
+    A name is investable only if it still has a price inside ``price_ffill_limit``
+    and its ADTV print is inside that same limit and at least ``adtv_min``.
+    Factor values may be older than that window.
+    """
     score_rows: list[pd.Series] = []
     weight_rows: list[pd.Series] = []
     rebal_rows: list[dict[str, Any]] = []
@@ -194,10 +216,19 @@ def _form_rebalance_books(
     prev_weights: Optional[pd.Series] = None
 
     for dt in rebalance_dates:
-        adtv = snapshot_series(adtv_panel, dt, config.adtv_field)
+        traded = _traded_names(prices, dt)
+        if traded.empty:
+            continue
+        adtv = snapshot_series(
+            adtv_panel,
+            dt,
+            config.adtv_field,
+            max_age=config.price_ffill_limit,
+        )
         if adtv.empty:
             continue
-        universe = adtv[adtv >= config.adtv_min].dropna().index
+        liquid = adtv.reindex(traded)
+        universe = liquid[liquid >= config.adtv_min].dropna().index
         if len(universe) < config.min_names:
             continue
 
@@ -403,7 +434,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
 
     1. Resolve components from Fibery style tags (or explicit mnemonics)
     2. Load historical ``factor_zoo`` panels via ``get_descriptors``
-    3. On each rebalance date: ADTV filter → PIT snapshot → score → weights
+    3. On each rebalance date: recent price and ADTV filter → PIT snapshot → score → weights
     4. Hold weights until the next rebalance; compute daily P&L from ``price_field``
     5. Debit trading costs on rebalance closes and borrow on overnight shorts
     """
@@ -435,6 +466,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         rebalance_dates=rebalance_dates,
         adtv_panel=panels["adtv"],
         component_panel=panels["components"],
+        prices=prices,
         components=components,
         higher_is_better=higher_is_better,
     )

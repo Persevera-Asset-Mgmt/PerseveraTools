@@ -109,13 +109,22 @@ def snapshot_series(
     panel: pd.DataFrame,
     as_of: pd.Timestamp,
     field: str,
+    *,
+    max_age: Optional[int] = None,
 ) -> pd.Series:
     """
     Point-in-time Series indexed by ticker for a single descriptor.
 
     ``panel`` columns are MultiIndex ``(ticker, descriptor)`` or simple ticker
     columns when the panel was loaded for a single field.
+
+    ``max_age`` caps how many subsequent panel rows may carry the last print
+    (``None`` keeps the last value with no age limit). The count is in rows of
+    ``panel``, which for ``factor_zoo`` is the union of observation dates.
     """
+    if max_age is not None and int(max_age) < 0:
+        raise ValueError("max_age must be >= 0")
+
     if panel.empty:
         return pd.Series(dtype=float, name=field)
 
@@ -123,7 +132,10 @@ def snapshot_series(
     if hist.empty:
         return pd.Series(dtype=float, name=field)
 
-    snapshot = hist.ffill().iloc[-1]
+    if max_age is None:
+        snapshot = hist.ffill().iloc[-1]
+    else:
+        snapshot = hist.ffill(limit=int(max_age)).iloc[-1]
     if isinstance(snapshot.index, pd.MultiIndex):
         try:
             out = snapshot.xs(field, level=-1)

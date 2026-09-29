@@ -92,7 +92,8 @@ def load_backtest_panels(
 
     Candidate pool comes from ``resolve_universe_codes`` (taxonomy by denomination,
     or an explicit ``codes`` list). The investable universe on each rebalance date
-    is then ``adtv_field >= adtv_min`` (point-in-time).
+    is names still printing ``price_field`` within ``price_ffill_limit`` business
+    days and with ``adtv_field >= adtv_min`` over that same window.
     """
     codes = resolve_universe_codes(config)
     if codes is not None and not codes:
