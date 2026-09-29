@@ -3,12 +3,12 @@ Motor matemático do Espectro de Alocação Onshore — Persevera Asset Manageme
 
 Metodologia: Risk Budgeting paramétrico com targets de contribuição de risco
 por bucket. Para cada perfil:
-  • Define-se uma distribuição-alvo de RC entre buckets (interpolada
-    linearmente entre os endpoints `p1` e `p10` da SpectrumConfig).
-  • Distribui-se o RC-target uniformemente entre as classes de cada bucket
-    (ou via `intra_rc_weights` se fornecido).
-  • O otimizador encontra os pesos que produzem essa distribuição de risco
-    com a vol-alvo do perfil.
+  • Define-se uma distribuição-alvo de RC entre buckets (interpolada entre
+    os endpoints `p1` e `p10` da SpectrumConfig, com curvatura por bucket).
+  • O otimizador impõe esse RC por bucket e a vol-alvo do perfil como
+    restrições; se inviável, o RC por bucket vira penalidade (fallback).
+  • Dentro de cada bucket, o RC é dividido uniformemente entre as classes
+    (ou via `intra_rc_weights`) como objetivo secundário.
 
 Características:
   • Consome apenas SpectrumConfig (sem conhecer Fibery/banco/etc.)
@@ -259,48 +259,213 @@ def _expand_rc_to_assets(
 
 
 # ── Otimização por perfil: Risk Budgeting com constraint de Max RC ────────────
+#
+# Por que o RC-target é imposto por BUCKET e não por classe
+# ---------------------------------------------------------
+# Fixar o RC de todas as n classes, junto com soma(w)=1, determina uma única
+# carteira (risk budgeting clássico) — e portanto uma única vol. Exigir ainda
+# vol = vol_target sobre-determina o problema: o solver cumpre a vol (restrição
+# dura) e sacrifica o RC, tipicamente tirando RC de RF nos perfis
+# intermediários. Com RC imposto só por bucket, a mistura intra-bucket fica
+# livre para atingir a vol-alvo; a divisão de RC entre as classes de cada
+# bucket (uniforme ou `intra_rc_weights`) vira objetivo secundário.
+#
+# Estágios:
+#   1. "hard"    — RC por bucket como igualdade.
+#   2. "penalty" — se (1) for inviável (ex.: vol-alvo acima do que o RC por
+#                  bucket permite), RC por bucket vira penalidade forte no
+#                  objetivo; a vol-alvo continua dura.
+
+RC_BUCKET_PENALTY = 1e3   # peso do desvio de RC por bucket no estágio "penalty"
+RC_BUCKET_TOL = 1e-3      # tolerância (fração) para considerar o RC por bucket atingido
+N_RANDOM_STARTS = 8       # starts aleatórios (semente fixa) além dos determinísticos
+
 
 def _optimize_profile_rb(
     vol_target: float,
     cov: np.ndarray,
-    rc_target_asset: np.ndarray,
+    rc_target_bucket: np.ndarray,        # (k,) na ordem de bucket_indices
+    rc_target_asset: np.ndarray,         # (n,) define a divisão intra-bucket
     max_weights: np.ndarray,
     max_rc: np.ndarray,                  # (n,) com NaN onde não há limite
     bucket_indices: dict[str, list[int]],
     min_weight_threshold: float = 0.005,
-) -> tuple[np.ndarray, bool]:
+    seed: int = 0,
+) -> tuple[np.ndarray, bool, str]:
     """
     Encontra w tal que:
       • soma(w) = 1
-      • vol(w) = vol_target  (igualdade)
+      • vol(w) = vol_target                         (igualdade)
       • 0 ≤ w_i ≤ max_weight_i
-      • rc_pct_i(w) ≤ max_rc_i (onde definido)
-      • Σ_i (rc_pct_i - rc_target_asset_i)^2 é mínima
+      • rc_pct_i(w) ≤ max_rc_i                      (onde definido)
+      • RC do bucket b = rc_target_bucket[b]        (igualdade; ou penalidade)
+      • minimiza o desvio da divisão de RC dentro de cada bucket em relação a
+        rc_target_asset (objetivo secundário)
 
-    Retorna (w, converged).
+    Retorna (w, converged, mode) com mode ∈ {"hard", "penalty"}.
+    `converged` exige vol, bounds, max_rc E RC por bucket dentro de tolerância.
     """
     n = len(rc_target_asset)
     has_max_rc = ~np.isnan(max_rc)
+    bucket_list = list(bucket_indices.values())
+    rc_target_bucket = np.asarray(rc_target_bucket, dtype=float)
 
-    def objective(w):
-        return _rc_l2_objective(w, cov, rc_target_asset)
+    def intra_obj(w):
+        return _intra_rc_objective(w, cov, rc_target_asset, bucket_list)
 
-    constraints = [
-        {"type": "eq", "fun": lambda w: w.sum() - 1},
-        {"type": "eq", "fun": lambda w: _portfolio_vol(w, cov) - vol_target},
+    def penalty_obj(w):
+        dev = _bucket_rc_pct(w, cov, bucket_list) - rc_target_bucket
+        return RC_BUCKET_PENALTY * float(np.sum(dev ** 2)) + intra_obj(w)
+
+    def base_constraints(active=None):
+        cons = [
+            {"type": "eq", "fun": lambda w: w.sum() - 1},
+            {"type": "eq", "fun": lambda w: _portfolio_vol(w, cov) - vol_target},
+        ]
+        for i in range(n):
+            if has_max_rc[i] and (active is None or active[i]):
+                limit = float(max_rc[i])
+                cons.append({
+                    "type": "ineq",
+                    "fun": lambda w, idx=i, lim=limit: lim - _rc_pct_at(w, cov, idx),
+                })
+        return cons
+
+    # k-1 igualdades bastam: a soma dos RC por bucket é sempre 1.
+    bucket_constraints = [
+        {"type": "eq",
+         "fun": lambda w, k=k: _bucket_rc_pct(w, cov, bucket_list)[k] - rc_target_bucket[k]}
+        for k in range(len(bucket_list) - 1)
     ]
-    # Adiciona constraint de RC máximo para cada classe que tem max_rc definido
-    for i in range(n):
-        if has_max_rc[i]:
-            limit = float(max_rc[i])
-            constraints.append({
-                "type": "ineq",
-                "fun": lambda w, idx=i, lim=limit: lim - _rc_pct_at(w, cov, idx),
-            })
+
+    def feasible(w, check_bucket):
+        return _is_converged(
+            w, cov, vol_target, max_weights, max_rc,
+            bucket_list=bucket_list if check_bucket else None,
+            rc_target_bucket=rc_target_bucket if check_bucket else None,
+        )
 
     bounds = [(0.0, float(max_weights[i])) for i in range(n)]
+    starts = _initial_points(cov, rc_target_asset, bucket_indices, seed)
 
-    # Pontos iniciais
+    stages = [
+        ("hard", intra_obj, bucket_constraints, True),
+        ("penalty", penalty_obj, [], False),
+    ]
+    best_w, mode = None, "penalty"
+    fallback_w, fallback_val = None, np.inf
+    for name, obj, extra, check_bucket in stages:
+        cand_w, cand_val = None, np.inf
+        for w0 in starts:
+            w0 = np.clip(w0, 0.0, max_weights)
+            if w0.sum() <= 0:
+                continue
+            w0 = w0 / w0.sum()
+            try:
+                res = minimize(
+                    obj, w0,
+                    method="SLSQP",
+                    bounds=bounds,
+                    constraints=base_constraints() + extra,
+                    options={"maxiter": 5_000, "ftol": 1e-13},
+                )
+            except Exception as exc:
+                warnings.warn(
+                    f"_optimize_profile_rb[{name}]: falha — {exc}",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                continue
+            if not res.success:
+                continue
+            if name == "penalty" and res.fun < fallback_val:
+                fallback_w, fallback_val = res.x.copy(), res.fun
+            if feasible(res.x, check_bucket) and res.fun < cand_val:
+                cand_w, cand_val = res.x.copy(), res.fun
+        if cand_w is not None:
+            best_w, mode = cand_w, name
+            break
+
+    if best_w is None:
+        # Nenhum estágio produziu solução factível: melhor esforço.
+        best_w = fallback_w if fallback_w is not None else starts[0]
+
+    best_w = np.clip(best_w, 0.0, 1.0)
+    if best_w.sum() > 0:
+        best_w /= best_w.sum()
+
+    # ── Polish: zera pesos < threshold e RE-OTIMIZA no conjunto ativo,
+    # mantendo as restrições do estágio que produziu a solução.
+    active = best_w >= min_weight_threshold
+    check_bucket = mode == "hard"
+    if active.sum() > 0 and not active.all():
+        polish_bounds = [
+            (0.0, float(max_weights[i])) if active[i] else (0.0, 0.0)
+            for i in range(n)
+        ]
+        # Bucket sem classe ativa tem RC ≡ 0: sua igualdade seria degenerada
+        # (gradiente nulo → matriz singular no SLSQP). Impõe RC só nos buckets
+        # com classe ativa, menos um (a soma fecha em 1). Se o alvo do bucket
+        # zerado não for ~0, `feasible` rejeita o polish.
+        polish_extra = []
+        if check_bucket:
+            live = [k for k, idxs in enumerate(bucket_list) if active[idxs].any()]
+            polish_extra = [
+                {"type": "eq",
+                 "fun": lambda w, k=k: _bucket_rc_pct(w, cov, bucket_list)[k] - rc_target_bucket[k]}
+                for k in live[:-1]
+            ]
+        w_start = best_w.copy()
+        w_start[~active] = 0.0
+        w_start /= w_start.sum()
+        anchor = best_w.copy()
+
+        def bucket_dev(w):
+            return float(np.sum((_bucket_rc_pct(w, cov, bucket_list) - rc_target_bucket) ** 2))
+
+        try:
+            res_polish = minimize(
+                lambda w: float(np.sum((w - anchor) ** 2)), w_start,
+                method="SLSQP",
+                bounds=polish_bounds,
+                constraints=base_constraints(active) + polish_extra,
+                options={"maxiter": 2_000, "ftol": 1e-14},
+            )
+            if res_polish.success:
+                polished = np.clip(res_polish.x, 0.0, 1.0)
+                polished[~active] = 0.0
+                if polished.sum() > 0:
+                    polished /= polished.sum()
+                # "hard": aceita se continua factível (RC por bucket exato);
+                # a piora na divisão intra-bucket é o custo aceito do threshold.
+                # "penalty": exige também que o desvio de RC por bucket não piore.
+                ok = feasible(polished, check_bucket)
+                if ok and not check_bucket:
+                    ok = bucket_dev(polished) <= bucket_dev(best_w) + 1e-6
+                if ok:
+                    best_w = polished
+        except Exception as exc:
+            warnings.warn(
+                f"_optimize_profile_rb: polish falhou — {exc}",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+
+    # ── Convergência real, avaliada sobre a solução FINAL e sempre incluindo
+    # o RC por bucket: no estágio "penalty" o RC por bucket não é atingido
+    # por construção, e isso deve aparecer como não-convergido.
+    converged = feasible(best_w, True)
+    return best_w, converged, mode
+
+
+def _initial_points(
+    cov: np.ndarray,
+    rc_target_asset: np.ndarray,
+    bucket_indices: dict[str, list[int]],
+    seed: int,
+) -> list[np.ndarray]:
+    """Starts determinísticos (inverse-vol ponderado por RC, EW, EW por bucket) + aleatórios."""
+    n = len(rc_target_asset)
     starts: list[np.ndarray] = []
     vols_diag = np.sqrt(np.diag(cov))
     if (vols_diag > 0).all():
@@ -315,124 +480,48 @@ def _optimize_profile_rb(
             w0_bkt[i] = bucket_rc / len(idxs)
     if w0_bkt.sum() > 0:
         starts.append(w0_bkt / w0_bkt.sum())
+    rng = np.random.default_rng(seed)
+    starts.extend(rng.dirichlet(np.ones(n)) for _ in range(N_RANDOM_STARTS))
+    return starts
 
-    # Seleção em duas camadas: entre os starts que o solver marcou success,
-    # prefere os que são DE FATO factíveis (vol-alvo, bounds, max_rc dentro de
-    # tolerância) e, dentre esses, o de menor objetivo de RB. Se nenhum for
-    # factível, cai para o de menor objetivo (melhor esforço).
-    best_w, best_obj = None, np.inf            # melhor factível
-    fallback_w, fallback_obj = None, np.inf    # melhor sem factibilidade
-    for w0_raw in starts:
-        w0 = np.clip(w0_raw, [b[0] for b in bounds], [b[1] for b in bounds])
-        if w0.sum() <= 0:
+
+def _bucket_rc_pct(
+    w: np.ndarray, cov: np.ndarray, bucket_list: list[list[int]]
+) -> np.ndarray:
+    """RC% agregado por bucket (soma 1), na ordem de `bucket_list`."""
+    rc = w * (cov @ w)
+    total = rc.sum()
+    if total <= 1e-18:
+        return np.zeros(len(bucket_list))
+    rc_pct = rc / total
+    return np.array([rc_pct[idxs].sum() for idxs in bucket_list])
+
+
+def _intra_rc_objective(
+    w: np.ndarray,
+    cov: np.ndarray,
+    rc_target_asset: np.ndarray,
+    bucket_list: list[list[int]],
+) -> float:
+    """
+    Desvio da divisão de RC DENTRO de cada bucket em relação à divisão-alvo
+    (rc_target_asset normalizado no bucket), ponderado pelo RC realizado do
+    bucket. Buckets com RC-alvo ~0 não entram (divisão indefinida).
+    """
+    rc = w * (cov @ w)
+    total = rc.sum()
+    if total <= 1e-18:
+        return 1e6
+    rc_pct = rc / total
+    s = 0.0
+    for idxs in bucket_list:
+        tgt = rc_target_asset[idxs]
+        tgt_tot = tgt.sum()
+        real_tot = rc_pct[idxs].sum()
+        if tgt_tot <= 1e-12 or real_tot <= 1e-12:
             continue
-        w0 = w0 / w0.sum()
-        try:
-            res = minimize(
-                objective, w0,
-                method="SLSQP",
-                bounds=bounds,
-                constraints=constraints,
-                options={"maxiter": 5_000, "ftol": 1e-12},
-            )
-            if not res.success:
-                continue
-            cand = res.x.copy()
-            if res.fun < fallback_obj:
-                fallback_obj = res.fun
-                fallback_w = cand
-            if _is_converged(cand, cov, vol_target, max_weights, max_rc):
-                if res.fun < best_obj:
-                    best_obj = res.fun
-                    best_w = cand
-        except Exception as exc:
-            warnings.warn(
-                f"_optimize_profile_rb: falha — {exc}",
-                RuntimeWarning,
-                stacklevel=3,
-            )
-
-    if best_w is None:
-        best_w = fallback_w
-
-    if best_w is None:
-        best_w = starts[0] if starts else np.ones(n) / n
-        best_w = np.clip(best_w, 0.0, 1.0)
-        if best_w.sum() > 0:
-            best_w /= best_w.sum()
-
-    best_w = np.clip(best_w, 0.0, 1.0)
-    if best_w.sum() > 0:
-        best_w /= best_w.sum()
-
-    # ── Polish: zera pesos < threshold e RE-OTIMIZA no conjunto ativo ────
-    active = best_w >= min_weight_threshold
-    if active.sum() == 0:
-        converged = _is_converged(best_w, cov, vol_target, max_weights, max_rc)
-        return best_w, converged
-
-    polish_bounds = [
-        (0.0, float(max_weights[i])) if active[i] else (0.0, 0.0)
-        for i in range(n)
-    ]
-    polish_constraints = [
-        {"type": "eq", "fun": lambda w: w.sum() - 1},
-        {"type": "eq", "fun": lambda w: _portfolio_vol(w, cov) - vol_target},
-    ]
-    # Mantém constraint de max_rc no polish
-    for i in range(n):
-        if has_max_rc[i] and active[i]:
-            limit = float(max_rc[i])
-            polish_constraints.append({
-                "type": "ineq",
-                "fun": lambda w, idx=i, lim=limit: lim - _rc_pct_at(w, cov, idx),
-            })
-
-    w_start = best_w.copy()
-    w_start[~active] = 0.0
-    if w_start.sum() > 0:
-        w_start /= w_start.sum()
-
-    def polish_obj(w):
-        return float(np.sum((w - best_w) ** 2))
-
-    try:
-        res_polish = minimize(
-            polish_obj, w_start,
-            method="SLSQP",
-            bounds=polish_bounds,
-            constraints=polish_constraints,
-            options={"maxiter": 2_000, "ftol": 1e-14},
-        )
-        if res_polish.success:
-            polished = np.clip(res_polish.x, 0.0, 1.0)
-            polished[~active] = 0.0
-            if polished.sum() > 0:
-                polished /= polished.sum()
-            # Aceita o polish SOMENTE se: (a) satisfaz de fato as constraints
-            # e (b) não piora o objetivo de RB além de folga numérica. Caso
-            # contrário, mantém best_w (o polish é uma reprojeção no active
-            # set, não pode degradar a qualidade da solução silenciosamente).
-            obj_before = _rc_l2_objective(best_w, cov, rc_target_asset)
-            obj_after = _rc_l2_objective(polished, cov, rc_target_asset)
-            polished_ok = _is_converged(
-                polished, cov, vol_target, max_weights, max_rc
-            )
-            if polished_ok and obj_after <= obj_before + 1e-9:
-                best_w = polished
-    except Exception as exc:
-        warnings.warn(
-            f"_optimize_profile_rb: polish falhou — {exc}",
-            RuntimeWarning,
-            stacklevel=3,
-        )
-
-    # ── Convergência real: avaliada sobre a solução FINAL, não sobre o
-    # status do solver. Um start pode reportar success com a igualdade de
-    # vol fora de tolerância ou com max_rc violado; aqui isso é capturado.
-    converged = _is_converged(best_w, cov, vol_target, max_weights, max_rc)
-
-    return best_w, converged
+        s += real_tot * float(np.sum((rc_pct[idxs] / real_tot - tgt / tgt_tot) ** 2))
+    return s
 
 
 def _rc_pct_at(w: np.ndarray, cov: np.ndarray, idx: int) -> float:
@@ -447,27 +536,6 @@ def _rc_pct_at(w: np.ndarray, cov: np.ndarray, idx: int) -> float:
     return float(rc[idx] / total)
 
 
-def _rc_l2_objective(
-    w: np.ndarray, cov: np.ndarray, rc_target_asset: np.ndarray
-) -> float:
-    """
-    Objetivo de Risk Budgeting: soma dos quadrados dos desvios entre o RC%
-    realizado e o RC-target por classe. Penalidade alta se a vol colapsa.
-
-    Helper de módulo (não closure) para poder reavaliar a mesma métrica
-    sobre soluções candidatas (best_w, polished) de forma consistente.
-    """
-    pv = _portfolio_vol(w, cov)
-    if pv <= 1e-12:
-        return 1e6
-    rc = w * (cov @ w) / pv
-    total = rc.sum()
-    if total <= 0:
-        return 1e6
-    rc_pct = rc / total
-    return float(np.sum((rc_pct - rc_target_asset) ** 2))
-
-
 def _is_converged(
     w: np.ndarray,
     cov: np.ndarray,
@@ -478,6 +546,9 @@ def _is_converged(
     sum_tol: float = 1e-6,
     weight_tol: float = 1e-6,
     rc_tol: float = 1e-4,
+    bucket_list: Optional[list[list[int]]] = None,
+    rc_target_bucket: Optional[np.ndarray] = None,
+    rc_bucket_tol: float = RC_BUCKET_TOL,
 ) -> bool:
     """
     Verifica se `w` satisfaz de fato as constraints do problema, dentro de
@@ -490,6 +561,8 @@ def _is_converged(
       • |vol(w) - vol_target| <= vol_tol           (igualdade de vol)
       • w_i <= max_weight_i + weight_tol  e  w_i >= -weight_tol
       • rc_pct_i(w) <= max_rc_i + rc_tol  (onde definido)
+      • |RC_b(w) - rc_target_bucket_b| <= rc_bucket_tol  (se bucket_list e
+        rc_target_bucket forem fornecidos)
 
     `vol_tol` é absoluto em fração de vol (5e-4 = 0.05 p.p. de vol a.a.).
     """
@@ -506,6 +579,10 @@ def _is_converged(
     has_max_rc = ~np.isnan(max_rc)
     for i in np.where(has_max_rc)[0]:
         if _rc_pct_at(w, cov, int(i)) > float(max_rc[i]) + rc_tol:
+            return False
+    if bucket_list is not None and rc_target_bucket is not None:
+        dev = np.abs(_bucket_rc_pct(w, cov, bucket_list) - rc_target_bucket)
+        if (dev > rc_bucket_tol).any():
             return False
     return True
 
@@ -630,7 +707,8 @@ def build_spectrum(config: SpectrumConfig) -> dict:
       rc_target_bucket      → dict[int→array]   RC-target por bucket
       rc_realized_bucket    → dict[int→array]   RC realizado por bucket
       rc_target_asset       → dict[int→array]   RC-target por classe
-      converged_per_profile → dict[int→bool]    True se o solver convergiu
+      converged_per_profile → dict[int→bool]    True se vol, limites e RC por bucket foram atingidos
+      rc_mode_per_profile   → dict[int→str]     "hard" (RC por bucket exato) ou "penalty" (fallback)
       bucket_indices        → dict
       bucket_labels         → dict
       min_weight_threshold  → float
@@ -675,6 +753,7 @@ def build_spectrum(config: SpectrumConfig) -> dict:
     rc_realized_bucket: dict[int, np.ndarray] = {}
     rc_target_asset: dict[int, np.ndarray] = {}
     converged_per_profile: dict[int, bool] = {}
+    rc_mode_per_profile: dict[int, str] = {}
 
     for p in range(1, config.n_profiles + 1):
         vt = float(vol_targets[p - 1])
@@ -683,19 +762,30 @@ def build_spectrum(config: SpectrumConfig) -> dict:
             rc_tgt_bkt, bucket_indices, config.intra_rc_weights
         )
 
-        w, converged = _optimize_profile_rb(
+        w, converged, mode = _optimize_profile_rb(
             vol_target=vt,
             cov=cov,
+            rc_target_bucket=rc_tgt_bkt,
             rc_target_asset=rc_tgt_ast,
             max_weights=config.max_weights_array,
             max_rc=config.max_rc_array,
             bucket_indices=bucket_indices,
             min_weight_threshold=config.min_weight_threshold,
+            seed=p,
         )
 
         weights[p] = w
         vol_realized[p] = _portfolio_vol(w, cov) * 100.0
         converged_per_profile[p] = converged
+        rc_mode_per_profile[p] = mode
+        if mode == "penalty":
+            warnings.warn(
+                f"Perfil {p}: RC por bucket inviável com vol-alvo "
+                f"{vt*100:.2f}% — resolvido por penalidade (RC por bucket "
+                f"aproximado). Revise sigma_max, Max Weight ou RC P10.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         rc = _risk_contrib(w, cov)
         rc_total = rc.sum()
@@ -721,6 +811,7 @@ def build_spectrum(config: SpectrumConfig) -> dict:
         "rc_target_asset":       rc_target_asset,
         "rc_realized_bucket":    rc_realized_bucket,
         "converged_per_profile": converged_per_profile,
+        "rc_mode_per_profile":   rc_mode_per_profile,
         "bucket_indices":        bucket_indices,
         "bucket_labels":         config.bucket_labels,
         "min_weight_threshold":  config.min_weight_threshold,
@@ -739,6 +830,7 @@ def get_profile_summary(result: dict, profile: int) -> dict:
     vr = result["vol_realized"][profile]
     threshold = result.get("min_weight_threshold", 0.005)
     converged = result.get("converged_per_profile", {}).get(profile, True)
+    rc_mode = result.get("rc_mode_per_profile", {}).get(profile)
 
     bucket_keys = list(result["bucket_indices"].keys())
     rc_tgt_bkt  = result["rc_target_bucket"][profile]
@@ -774,6 +866,7 @@ def get_profile_summary(result: dict, profile: int) -> dict:
         "vol_target":     vt,
         "vol_realized":   vr,
         "converged":      converged,
+        "rc_mode":        rc_mode,
         "bucket_weights": bucket_weights,
         "bucket_rc":      bucket_rc,
         "asset_weights":  asset_weights,
