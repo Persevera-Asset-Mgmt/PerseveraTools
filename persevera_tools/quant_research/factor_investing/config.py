@@ -31,7 +31,12 @@ class BacktestConfig:
     only when ``price_field`` is still printing after a forward-fill of at most
     ``price_ffill_limit`` business days, and ``adtv_field >= adtv_min`` using an
     ADTV print no older than that same limit. Factor components may keep their
-    last value with no age limit. Pass ``codes`` to restrict further.
+    last value with no age limit. Pass ``codes`` to restrict further (this skips
+    the ``denomination`` filter).
+
+    ``one_class_per_issuer=True`` keeps only the highest-ADTV ticker per B3
+    radical (e.g. PETR3 vs PETR4) among names with factor data, re-chosen on
+    every rebalance.
 
     Selection: ``selection_mode="quantile"`` uses ``quantile`` (fraction per tail);
     ``selection_mode="top_n"`` uses a fixed ``top_n`` names per tail.
@@ -63,6 +68,7 @@ class BacktestConfig:
     rebalance_dates: Optional[Sequence[DateLike]] = None
     price_field: str = "price_close"
     codes: Optional[Sequence[str]] = None
+    one_class_per_issuer: bool = True
     price_ffill_limit: int = 5
     zR: float = 3.0
     zC: float = 3.0

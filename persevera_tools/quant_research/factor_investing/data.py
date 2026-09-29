@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional, Sequence
 
 import pandas as pd
@@ -83,6 +84,41 @@ def resolve_universe_codes(config: BacktestConfig) -> Optional[list[str]]:
     return get_codes_by_denomination(config.denomination)
 
 
+_RADICAL_RE = re.compile(r"^([A-Z0-9]{4})\d{1,2}[A-Z]?$")
+
+
+def ticker_radical(code: str) -> str:
+    """
+    B3 issuer root of a ticker (``PETR4`` → ``PETR``, ``TAEE11`` → ``TAEE``).
+
+    Codes that do not follow the B3 pattern (e.g. USD listings) are their own root.
+    """
+    text = str(code).strip().upper()
+    match = _RADICAL_RE.match(text)
+    return match.group(1) if match else text
+
+
+def most_liquid_per_radical(adtv: pd.Series) -> pd.Index:
+    """
+    Keep the highest-ADTV ticker of each radical; ties break alphabetically.
+
+    ``adtv`` is indexed by ticker; names with missing ADTV are dropped.
+    """
+    clean = adtv.dropna()
+    if clean.empty:
+        return pd.Index([])
+    frame = pd.DataFrame(
+        {
+            "code": clean.index.astype(str),
+            "adtv": clean.to_numpy(dtype=float),
+        }
+    )
+    frame["radical"] = frame["code"].map(ticker_radical)
+    frame = frame.sort_values(["radical", "adtv", "code"], ascending=[True, False, True])
+    keep = frame.drop_duplicates("radical", keep="first")["code"]
+    return pd.Index(clean.index[clean.index.astype(str).isin(keep)])
+
+
 def load_backtest_panels(
     config: BacktestConfig,
     components: Sequence[str],
@@ -136,12 +172,23 @@ def densify_prices(
     start: DateLike,
     end: DateLike,
     ffill_limit: int = 5,
+    holidays: Optional[Sequence[DateLike]] = None,
+    drop_empty_sessions: bool = True,
 ) -> pd.DataFrame:
     """
     Reindex prices to a business-day calendar and forward-fill short gaps.
 
     Prevents multi-day price moves from being attributed to a single session
     when intermediate dates are missing for some (or all) tickers.
+
+    ``holidays`` (e.g. ``utils.dates.get_holidays()``) are removed from the
+    weekday calendar. Prices printed on a listed holiday are dropped; the move
+    is still captured by the next session's return.
+
+    ``drop_empty_sessions`` also removes calendar days on which no ticker in
+    ``prices`` has a print (B3-only closures such as 24/12, 31/12, 25/01 that
+    are absent from the ANBIMA list). With a small ``prices`` panel a day on
+    which every name is suspended is removed too.
     """
     if prices.empty:
         return prices
@@ -150,9 +197,19 @@ def densify_prices(
     end_ts = _to_timestamp(end)
     cal_start = min(pd.Timestamp(prices.index.min()).normalize(), start_ts)
     cal_end = max(pd.Timestamp(prices.index.max()).normalize(), end_ts)
-    calendar = pd.bdate_range(cal_start, cal_end)
+    if holidays:
+        calendar = pd.bdate_range(
+            cal_start,
+            cal_end,
+            freq="C",
+            holidays=[_to_timestamp(h) for h in holidays],
+        )
+    else:
+        calendar = pd.bdate_range(cal_start, cal_end)
 
     dense = prices.reindex(calendar)
+    if drop_empty_sessions:
+        dense = dense.loc[dense.notna().any(axis=1)]
     if ffill_limit and ffill_limit > 0:
         dense = dense.ffill(limit=int(ffill_limit))
     return dense

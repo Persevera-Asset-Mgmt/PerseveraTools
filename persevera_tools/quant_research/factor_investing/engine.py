@@ -6,8 +6,14 @@ from typing import Any, Mapping, Optional, Sequence
 
 import pandas as pd
 
+from ...utils.dates import get_holidays
 from .config import BacktestConfig
-from .data import build_rebalance_dates, densify_prices, load_backtest_panels
+from .data import (
+    build_rebalance_dates,
+    densify_prices,
+    load_backtest_panels,
+    most_liquid_per_radical,
+)
 from .definitions import (
     get_higher_is_better_map,
     load_factor_definitions,
@@ -144,6 +150,7 @@ def _rebal_row(
         "n_long": int((weights > 0).sum()),
         "n_short": int((weights < 0).sum()),
         "n_missing_components": int(missing_all.sum()) if n_universe else 0,
+        "n_dropped_share_class": int(payload.get("n_dropped_share_class", 0)),
         "turnover": _turnover(prev_weights, weights),
         "traded_notional": traded,
         "trading_cost": traded * float(payload.get("trading_cost_bps", 0.0)) / 10_000.0,
@@ -237,6 +244,11 @@ def _form_rebalance_books(
             continue
         cross_u = cross.reindex(universe)
         cross_scored = cross_u.dropna(how="all")
+        n_dropped_share_class = 0
+        if config.one_class_per_issuer:
+            keep = most_liquid_per_radical(liquid.reindex(cross_scored.index))
+            n_dropped_share_class = len(cross_scored) - len(keep)
+            cross_scored = cross_scored.loc[keep]
         if len(cross_scored) < config.min_names:
             continue
 
@@ -271,6 +283,7 @@ def _form_rebalance_books(
                     "components": components,
                     "prev_weights": prev_weights,
                     "trading_cost_bps": config.trading_cost_bps,
+                    "n_dropped_share_class": n_dropped_share_class,
                 },
             )
         )
@@ -456,6 +469,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         start=config.start_date,
         end=config.end_date,
         ffill_limit=config.price_ffill_limit,
+        holidays=get_holidays(),
     )
     rebalance_dates = build_rebalance_dates(config, prices.index)
     if rebalance_dates.empty:
@@ -505,6 +519,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             "top_n": config.top_n,
             "adtv_min": config.adtv_min,
             "denomination": config.denomination,
+            "one_class_per_issuer": config.one_class_per_issuer,
             "trading_cost_bps": config.trading_cost_bps,
             "borrow_rate": config.borrow_rate,
         }
