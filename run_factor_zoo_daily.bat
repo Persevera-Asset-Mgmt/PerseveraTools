@@ -24,15 +24,15 @@ if errorlevel 1 (
 )
 
 :: Step 1: Bloomberg company data (raw inputs) -> factor_zoo
-call :run_script examples\run_factor_zoo_company_data.py
+call :run_script -m persevera_tools.data.factor_zoo.company_data
 if errorlevel 1 goto :failed
 
 :: Step 2: Derived factors — independent phase
-call :run_script examples\run_factor_zoo_pipeline.py --phase independent
+call :run_script -m persevera_tools.data.factor_zoo --phase independent
 if errorlevel 1 goto :failed
 
 :: Step 3: Derived factors — dependent phase (requires step 2 uploaded)
-call :run_script examples\run_factor_zoo_pipeline.py --phase dependent
+call :run_script -m persevera_tools.data.factor_zoo --phase dependent
 if errorlevel 1 goto :failed
 
 echo.

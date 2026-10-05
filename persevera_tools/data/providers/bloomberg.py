@@ -486,6 +486,7 @@ class BloombergProvider(DataProvider):
         frequency = self.frequencies.get(category)
         
         all_data = []
+        failed_exchanges: Dict[str, str] = {}
         for exchange in exchanges:
             self.logger.info(f"Processing exchange: {exchange}")
             
@@ -522,8 +523,15 @@ class BloombergProvider(DataProvider):
                 
             except Exception as e:
                 self.logger.error(f"Error processing {exchange}: {str(e)}")
+                failed_exchanges[exchange] = str(e)
                 continue
-                
+
+        # A partial result (one exchange missing) must fail too; otherwise it is
+        # saved and downstream steps run on incomplete data.
+        if failed_exchanges:
+            raise DataRetrievalError(
+                f"{category}: failed for exchange(s) {failed_exchanges}"
+            )
         if not all_data:
             raise DataRetrievalError("No data retrieved from any exchange")
             

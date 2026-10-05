@@ -110,9 +110,12 @@ class FinancialDataService:
         self.logger.info(f"Retrieving {category} {data_type} data from Bloomberg" + 
                         (f" with {additional_fields}" if additional_fields else ""))
         
+        # Retry only the Bloomberg download; a database failure is raised as-is
+        # instead of triggering a full re-download.
         attempt = 0
         last_error = None
-        
+        df = None
+
         while attempt < retry_attempts:
             try:
                 df = self.bloomberg.get_data(
@@ -126,32 +129,33 @@ class FinancialDataService:
                     custom_tickers=custom_tickers,
                     custom_fields=custom_fields
                 )
-                
-                if df.empty:
-                    self.logger.warning(f"No data retrieved for {category}")
-                    return df
-                
-                if save_to_db:
-                    db_table = table_name or ('indicadores' if data_type == 'market' else 'factor_zoo')
-                    self.logger.info(f"Saving {len(df)} rows to '{db_table}'")
-                    try:
-                        df = self._save_to_db(df, db_table, ['code', 'date', 'field'])
-                    except Exception as e:
-                        self.logger.error(f"Failed to save data to database: {str(e)}")
-                        raise
-                
-                return df
-                
+                break
             except Exception as e:
                 attempt += 1
                 last_error = e
                 self.logger.warning(f"Attempt {attempt} failed: {str(e)}")
                 if attempt < retry_attempts:
                     self.logger.info(f"Retrying... ({attempt}/{retry_attempts})")
-        
-        error_msg = f"Failed to retrieve data after {retry_attempts} attempts. Last error: {str(last_error)}"
-        self.logger.error(error_msg)
-        raise RuntimeError(error_msg)
+
+        if df is None:
+            error_msg = f"Failed to retrieve data after {retry_attempts} attempts. Last error: {str(last_error)}"
+            self.logger.error(error_msg)
+            raise RuntimeError(error_msg) from last_error
+
+        if df.empty:
+            self.logger.warning(f"No data retrieved for {category}")
+            return df
+
+        if save_to_db:
+            db_table = table_name or ('indicadores' if data_type == 'market' else 'factor_zoo')
+            self.logger.info(f"Saving {len(df)} rows to '{db_table}'")
+            try:
+                df = self._save_to_db(df, db_table, ['code', 'date', 'field'])
+            except Exception as e:
+                self.logger.error(f"Failed to save data to database: {str(e)}")
+                raise
+
+        return df
     
     def get_cvm_data(
         self,

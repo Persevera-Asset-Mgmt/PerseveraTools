@@ -112,7 +112,10 @@ def load_factor_slice(
         f"WHERE field IN {in_clause} AND date > :md "
         "ORDER BY date, field, code"
     )
-    return read_sql(query, params={"md": sql_min_date}, date_columns=["date"])
+    # raise_errors: a failed read must not be mistaken for "no rows" and skipped.
+    return read_sql(
+        query, params={"md": sql_min_date}, date_columns=["date"], raise_errors=True
+    )
 
 
 def finalize_derived(df: pd.DataFrame, *, output_min_date: str | None = "2024-01-01") -> pd.DataFrame:
