@@ -193,8 +193,13 @@ def to_sql(data: pd.DataFrame,
         engine.dispose()
 
 @timed
-def read_sql(sql_query: str, params: Optional[Dict[str, Any]] = None, date_columns: Optional[List[str]] = None) -> pd.DataFrame:
-    """Read data from SQL table based on the provided query."""
+def read_sql(sql_query: str, params: Optional[Dict[str, Any]] = None, date_columns: Optional[List[str]] = None, raise_errors: bool = False) -> pd.DataFrame:
+    """Read data from SQL table based on the provided query.
+
+    Errors are logged and an empty DataFrame is returned, unless ``raise_errors``
+    (for callers that combine several reads and must not mistake a failure for
+    an empty result).
+    """
     # Extract table name from query for logging
     table_name = "unknown"
     try:
@@ -224,6 +229,8 @@ def read_sql(sql_query: str, params: Optional[Dict[str, Any]] = None, date_colum
             return df
     except Exception as e:
         logger.error(f"Error executing SQL query: {e}", exc_info=True)
+        if raise_errors:
+            raise
         return pd.DataFrame()
     finally:
         engine.dispose()
