@@ -688,15 +688,22 @@ class BloombergProvider(DataProvider):
         keys = ['date', 'code_bloomberg']
         # xbbg lowercases field names (announcement_dt); compare case-insensitively.
         is_announcement = df['field'].astype('string').str.upper() == 'ANNOUNCEMENT_DT'
+        ann_raw = df.loc[is_announcement, keys + ['value']]
+        # The value format depends on the xbbg version (YYYYMMDD int, float
+        # such as 20180222.0, date string or datetime); a fixed '%Y%m%d'
+        # parse silently returned NaT for all of them under xbbg 0.12.
         ann = (
-            df.loc[is_announcement, keys + ['value']]
-            .assign(
-                ANNOUNCEMENT_DT=lambda x: pd.to_datetime(
-                    x['value'], format='%Y%m%d', errors='coerce'
-                )
-            )[keys + ['ANNOUNCEMENT_DT']]
+            ann_raw.assign(ANNOUNCEMENT_DT=_coerce_bdh_dates(ann_raw['value']).values)
+            [keys + ['ANNOUNCEMENT_DT']]
             .drop_duplicates(keys)
         )
+        n_raw = int(ann_raw['value'].notna().sum())
+        n_parsed = int(ann['ANNOUNCEMENT_DT'].notna().sum())
+        if n_raw and not n_parsed:
+            raise DataRetrievalError(
+                "ANNOUNCEMENT_DT returned but none could be parsed as a date "
+                f"(sample values: {ann_raw['value'].dropna().head(3).tolist()})"
+            )
         calendar = (
             df[keys]
             .drop_duplicates()
@@ -713,6 +720,10 @@ class BloombergProvider(DataProvider):
             calendar['ANNOUNCEMENT_DT'] < calendar['date']
         )
         calendar['date_adj'] = calendar['ANNOUNCEMENT_DT'].where(~bad_ann, fallback)
+        self.logger.info(
+            f"Quarterly dates: {int((~bad_ann).sum())} from ANNOUNCEMENT_DT, "
+            f"{int(bad_ann.sum())} period end + {self._QUARTERLY_FALLBACK_LAG_DAYS}d fallback"
+        )
         calendar['date_dif'] = calendar.groupby('code_bloomberg')['date_adj'].diff(1)
         calendar['date_adj'] = np.where(
             calendar['date_dif'].dt.days < 0, fallback, calendar['date_adj']
