@@ -25,6 +25,7 @@ capacity/limit error stops the run cleanly — rerun the next day.
 Usage::
 
     python scripts/factor_zoo_backfill.py plan                 # volumes, no Bloomberg
+    python scripts/factor_zoo_backfill.py check                # first quarterly batch, no writes
     python scripts/factor_zoo_backfill.py run --max-jobs 2   # trial
     python scripts/factor_zoo_backfill.py run                # everything, in priority order
 """
@@ -46,7 +47,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from persevera_tools.data.lookups import get_securities_by_exchange  # noqa: E402
-from persevera_tools.data.providers.bloomberg import BloombergProvider  # noqa: E402
+from persevera_tools.data.providers.bloomberg import BloombergProvider, _bdh  # noqa: E402
 from persevera_tools.db.connection import get_db_engine  # noqa: E402
 from persevera_tools.db.operations import read_sql  # noqa: E402
 
@@ -258,9 +259,47 @@ def run(jobs: list[Job], bp: BloombergProvider, max_jobs: int | None) -> int:
     return 0
 
 
+def check(jobs: list[Job], bp: BloombergProvider, sample: str = "BBAS3") -> int:
+    """Download the first quarterly job without writing; show how dates come out."""
+    import logging
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.INFO)
+    bp.logger.addHandler(handler)
+    bp.logger.setLevel(logging.INFO)
+    job = next(j for j in jobs if bp.frequencies.get(j.category) == "quarterly")
+    tickers, fields = list(job.tickers), list(bp.field_mappings[job.category])
+    print(f"Checking {job.key} (nothing is written)", flush=True)
+    raw = _bdh(tickers=tickers, flds=fields, start_date=job.start,
+               EQY_FUND_CRNCY=bp.COUNTRY_CURRENCIES[job.exchange], FILING_STATUS="OR",
+               **bp._ADJUST_SPLIT_ONLY)
+    long = bp._bdh_to_long(raw, tickers=tickers, fields=fields)
+    print(f"raw type={type(raw).__name__} shape={getattr(raw, 'shape', None)}; long rows={len(long):,}")
+    ann = long[long["field"].astype(str).str.upper() == "ANNOUNCEMENT_DT"]
+    v = ann["value"]
+    num = pd.to_numeric(v, errors="coerce")
+    in_range = num.between(19000101, 21001231)
+    print(f"ANNOUNCEMENT_DT rows={len(v):,} non-null={int(v.notna().sum()):,} "
+          f"YYYYMMDD-like={int(in_range.sum()):,} other={int((v.notna() & ~in_range).sum()):,}")
+    print(f"value types: {v.dropna().map(lambda x: type(x).__name__).value_counts().to_dict()}")
+    odd = ann[v.notna() & ~in_range]
+    if len(odd):
+        print("sample of non-YYYYMMDD values:")
+        print(odd.groupby("code_bloomberg")["value"].agg(["size", "first"]).head(15).to_string())
+    adj = bp._adjust_quarterly_dates(long)
+    s = f"{sample} {job.exchange} Equity"
+    first_field = next(f for f in fields if f.upper() != "ANNOUNCEMENT_DT")
+    before = long[(long["code_bloomberg"] == s) & (long["field"].astype(str).str.upper() == first_field.upper())]
+    after = adj[(adj["code_bloomberg"] == s) & (adj["field"].astype(str).str.upper() == first_field.upper())]
+    print()
+    print(f"{s} {first_field}: period end (bdh) -> stored date")
+    print(pd.DataFrame({"period_end": before["date"].values[:12], "stored_date": after["date"].values[:12],
+                        "value": after["value"].values[:12]}).to_string(index=False))
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("command", choices=["plan", "run"])
+    p.add_argument("command", choices=["plan", "check", "run"])
     p.add_argument("--part", choices=["active", "delisted", "all"], default="all")
     p.add_argument("--max-jobs", type=int, default=None)
     args = p.parse_args(argv)
@@ -270,6 +309,8 @@ def main(argv=None) -> int:
     jobs = ordered(active, delisted)
 
     bp = BloombergProvider(start_date=HISTORY_START)  # loads Fibery mappings; no Bloomberg call
+    if args.command == "check":
+        return check(jobs, bp)
     if args.command == "plan":
         tbl = plan(jobs, bp)
         print(tbl.to_string())

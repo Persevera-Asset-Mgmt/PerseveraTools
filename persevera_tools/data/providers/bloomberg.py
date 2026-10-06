@@ -85,6 +85,30 @@ def _coerce_bdh_dates(dates: pd.Series) -> pd.Series:
     return parsed
 
 
+def _parse_announcement_dates(values: pd.Series) -> pd.Series:
+    """Parse ANNOUNCEMENT_DT values one by one.
+
+    Numbers (int, float such as 20180222.0, or numeric strings) are read as
+    YYYYMMDD; anything else (date strings, datetimes) goes through
+    ``pd.to_datetime``. Unlike ``_coerce_bdh_dates`` — which picks one format
+    for the whole batch — a few odd values can't turn every date into an
+    epoch-nanosecond 1970 timestamp; out-of-range numbers become NaT.
+    """
+    out = pd.Series(pd.NaT, index=values.index, dtype='datetime64[ns]')
+    obj = values.astype(object)
+    is_dt = obj.map(lambda v: isinstance(v, (pd.Timestamp, datetime, np.datetime64)))
+    num = pd.to_numeric(obj.where(~is_dt), errors='coerce')
+    yyyymmdd = num.between(19000101, 21001231)
+    if yyyymmdd.any():
+        out[yyyymmdd] = pd.to_datetime(
+            num[yyyymmdd].round().astype('int64').astype(str), format='%Y%m%d', errors='coerce'
+        )
+    other = obj.notna() & num.isna()
+    if other.any():
+        out[other] = pd.to_datetime(obj[other], errors='coerce')
+    return out
+
+
 def _map_bloomberg_fields(series: pd.Series, field_list: Dict[str, str]) -> pd.Series:
     """Map Bloomberg field codes to mnemonics, case-insensitively.
 
@@ -692,13 +716,14 @@ class BloombergProvider(DataProvider):
         # The value format depends on the xbbg version (YYYYMMDD int, float
         # such as 20180222.0, date string or datetime); a fixed '%Y%m%d'
         # parse silently returned NaT for all of them under xbbg 0.12.
+        parsed = _parse_announcement_dates(ann_raw['value'])
         ann = (
-            ann_raw.assign(ANNOUNCEMENT_DT=_coerce_bdh_dates(ann_raw['value']).values)
+            ann_raw.assign(ANNOUNCEMENT_DT=parsed.values)
             [keys + ['ANNOUNCEMENT_DT']]
             .drop_duplicates(keys)
         )
         n_raw = int(ann_raw['value'].notna().sum())
-        n_parsed = int(ann['ANNOUNCEMENT_DT'].notna().sum())
+        n_parsed = int(parsed.notna().sum())
         if n_raw and not n_parsed:
             raise DataRetrievalError(
                 "ANNOUNCEMENT_DT returned but none could be parsed as a date "
@@ -720,10 +745,19 @@ class BloombergProvider(DataProvider):
             calendar['ANNOUNCEMENT_DT'] < calendar['date']
         )
         calendar['date_adj'] = calendar['ANNOUNCEMENT_DT'].where(~bad_ann, fallback)
-        self.logger.info(
+        # Rows whose announcement was returned but rejected (unparsed, or
+        # before the period end): a high share means a parsing problem, not
+        # genuinely missing dates — surface it instead of silently lagging.
+        rejected = int((bad_ann & calendar['ANNOUNCEMENT_DT'].notna()).sum()) + (n_raw - n_parsed)
+        msg = (
             f"Quarterly dates: {int((~bad_ann).sum())} from ANNOUNCEMENT_DT, "
-            f"{int(bad_ann.sum())} period end + {self._QUARTERLY_FALLBACK_LAG_DAYS}d fallback"
+            f"{int(bad_ann.sum())} period end + {self._QUARTERLY_FALLBACK_LAG_DAYS}d fallback "
+            f"({rejected} returned announcement dates unparsed or before the period end)"
         )
+        if n_raw and rejected > 0.2 * n_raw:
+            self.logger.warning(msg + " — check ANNOUNCEMENT_DT parsing")
+        else:
+            self.logger.info(msg)
         calendar['date_dif'] = calendar.groupby('code_bloomberg')['date_adj'].diff(1)
         calendar['date_adj'] = np.where(
             calendar['date_dif'].dt.days < 0, fallback, calendar['date_adj']
