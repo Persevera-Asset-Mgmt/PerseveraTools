@@ -6,7 +6,8 @@ Why
   splits and bonus issues (the daily run starts in 2020).
 * Quarterly rows without ANNOUNCEMENT_DT were dated at the period end; the new
   rule dates them period end + 90 days, so old rows sit on wrong dates.
-* ``price_close_split_adj`` is new and needs full history, including the
+* ``price_close_split_adj`` is new and needs full history (from 2000, the
+  first year factor_zoo has a partition for), including the
   delisted codes (with the per-share consensus fields their yields divide).
 
 How
@@ -53,6 +54,7 @@ from persevera_tools.db.operations import read_sql  # noqa: E402
 
 STATE = ROOT / "examples" / "backfill_state.json"
 DELISTED_CHECK = ROOT / "examples" / "validation_out" / "delisted_check.csv"
+# factor_zoo is partitioned by year from 2000; earlier rows have no partition.
 HISTORY_START = "2000-01-01"
 TODAY = pd.Timestamp.today().normalize()
 
@@ -62,7 +64,7 @@ TODAY = pd.Timestamp.today().normalize()
 # per-share categories only need 2000-2019; quarterly categories need the
 # full span (the announcement-date rule changed for every year).
 # market / technicals / volatility / beta / options / short_interest / yield
-# are left out: market already downloads from 1980 every day, and the others
+# are left out: market already downloads its full history every day, and the others
 # are Bloomberg-computed series not affected by the adjustment changes.
 PRE_DAILY_RUN_END = "2019-12-31"
 ACTIVE_CATEGORIES: dict[str, dict] = {
@@ -72,7 +74,7 @@ ACTIVE_CATEGORIES: dict[str, dict] = {
     "margins": {"batch": 100},
     "ratios": {"batch": 100},
     "leverage": {"batch": 100},
-    "market_split_adj": {"start": "1980-01-01", "batch": 50},
+    "market_split_adj": {"batch": 50},
     "num_of_shares": {"batch": 50, "end": PRE_DAILY_RUN_END},
     "dividend": {"batch": 50, "end": PRE_DAILY_RUN_END},
     "analyst_sentiment": {"batch": 50, "end": PRE_DAILY_RUN_END},
@@ -149,7 +151,7 @@ def delisted_jobs() -> list[Job]:
     jobs = []
     # Group by the year the code's history starts, so each request spans
     # roughly the life of its tickers.
-    d["start"] = d["first_date"].dt.year.astype(str) + "-01-01"
+    d["start"] = (d["first_date"].dt.year.clip(lower=int(HISTORY_START[:4]))).astype(str) + "-01-01"
     for (exchange, start), grp in d.groupby(["exchange", "start"]):
         end = (grp["last_date"].max() + pd.Timedelta(days=7)).strftime("%Y-%m-%d")
         regular = grp[~grp["code"].isin(TICKER_OVERRIDES)]
@@ -160,7 +162,7 @@ def delisted_jobs() -> list[Job]:
         row = d[d["code"] == code]
         if row.empty:
             continue
-        start = row["first_date"].iloc[0].strftime("%Y-01-01")
+        start = max(row["first_date"].iloc[0].strftime("%Y-01-01"), HISTORY_START)
         end = (row["last_date"].iloc[0] + pd.Timedelta(days=7)).strftime("%Y-%m-%d")
         tick = {ov["ticker"]: code}
         cur = {"currency": ov["currency"]}
@@ -211,6 +213,7 @@ WHERE z.code = s.code AND z.field = s.field AND z.date BETWEEN :start AND :end
 def replace_history(df: pd.DataFrame, job: Job) -> tuple[int, int]:
     """Archive + delete stored rows of the returned (code, field) pairs, insert new."""
     df = df.dropna(subset=["code", "date", "field", "value"])
+    df = df[pd.to_datetime(df["date"]) >= pd.Timestamp(HISTORY_START)]
     df = df[np.isfinite(pd.to_numeric(df["value"], errors="coerce"))]
     df = df.drop_duplicates(["code", "date", "field"], keep="last")[["code", "date", "field", "value"]]
     if df.empty:

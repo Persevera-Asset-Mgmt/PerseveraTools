@@ -22,6 +22,8 @@ import time
 from typing import Sequence
 
 START_DATE = "2020-01-01"
+# factor_zoo is partitioned by year from 2000; rows before that cannot be stored.
+HISTORY_FLOOR = "2000-01-01"
 EXCHANGES = ["BZ", "US"]
 STAGGER_SECONDS = 10
 
@@ -35,8 +37,8 @@ _COMMON = {
 
 # Fibery ``Categoria Independente`` values required by the derived pipeline.
 CATEGORIES: list[dict] = [
-    {"category": "market", "start_date": "1980-01-01"},
-    {"category": "market_split_adj", "start_date": "1980-01-01"},
+    {"category": "market", "start_date": HISTORY_FLOOR},
+    {"category": "market_split_adj", "start_date": HISTORY_FLOOR},
     {"category": "analyst_sentiment"},
     {"category": "balance_sheet"},
     {"category": "beta"},
