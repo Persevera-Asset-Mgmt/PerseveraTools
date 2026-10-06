@@ -8,6 +8,7 @@ import multiprocessing
 import time
 from typing import Dict, Iterable, Literal, Mapping, Sequence
 
+import numpy as np
 import pandas as pd
 
 from ...db.operations import read_sql, to_sql
@@ -122,6 +123,9 @@ def finalize_derived(df: pd.DataFrame, *, output_min_date: str | None = "2024-01
     if df.empty:
         return df.copy()
     out = df.sort_values(["date", "field", "code"]).copy()
+    # NaN/±inf carry no information; storing them only bloats factor_zoo.
+    out["value"] = pd.to_numeric(out["value"], errors="coerce")
+    out = out[np.isfinite(out["value"])]
     out["value"] = out["value"].round(5)
     if output_min_date:
         thresh = pd.Timestamp(output_min_date)

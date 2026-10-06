@@ -36,6 +36,7 @@ _COMMON = {
 # Fibery ``Categoria Independente`` values required by the derived pipeline.
 CATEGORIES: list[dict] = [
     {"category": "market", "start_date": "1980-01-01"},
+    {"category": "market_split_adj", "start_date": "1980-01-01"},
     {"category": "analyst_sentiment"},
     {"category": "balance_sheet"},
     {"category": "beta"},

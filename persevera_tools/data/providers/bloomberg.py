@@ -120,6 +120,29 @@ class BloombergProvider(DataProvider):
         'Consenso': 'consensus',
     }
 
+    # Explicit bdh adjustment elements, so stored history never depends on the
+    # Terminal user's DPDF<GO> settings. Total-return categories adjust prices
+    # for dividends and splits (momentum, price range); everything else is
+    # split-adjusted only, the same basis as Bloomberg per-share fields
+    # (EPS, BPS) — price_close_split_adj lives in its own category for that.
+    _TOTAL_RETURN_CATEGORIES = frozenset({'market'})
+    _ADJUST_TOTAL_RETURN = {
+        'adjustmentNormal': True,
+        'adjustmentAbnormal': True,
+        'adjustmentSplit': True,
+        'adjustmentFollowDPDF': False,
+    }
+    _ADJUST_SPLIT_ONLY = {
+        'adjustmentNormal': False,
+        'adjustmentAbnormal': False,
+        'adjustmentSplit': True,
+        'adjustmentFollowDPDF': False,
+    }
+
+    # Fallback availability lag for quarterly data without a usable
+    # ANNOUNCEMENT_DT: period end + 90 days (CVM DFP deadline; ITR is 45).
+    _QUARTERLY_FALLBACK_LAG_DAYS = 90
+
     _DEFAULT_MARKET_FIELDS = {'PX_LAST': 'close'}
     _CATEGORY_EXTRA_MARKET_FIELDS: Dict[str, Dict[str, str]] = {
         'Ativos Offshore': {'PX_DIRTY_MID': 'dirty_mid_price'},
@@ -510,13 +533,18 @@ class BloombergProvider(DataProvider):
                         index_list=index_list
                     )
                 else:
+                    adjustment = (
+                        self._ADJUST_TOTAL_RETURN
+                        if category in self._TOTAL_RETURN_CATEGORIES
+                        else self._ADJUST_SPLIT_ONLY
+                    )
                     df = self._get_regular_company_data(
                         securities_list=securities_list,
                         field_list=field_list,
                         frequency=frequency,
                         exchange=exchange if use_fund_currency else None,
                         best_fperiod_override=best_fperiod_override,
-                        **kwargs
+                        **{**adjustment, **kwargs}
                     )
                     
                 all_data.append(df)
@@ -675,10 +703,19 @@ class BloombergProvider(DataProvider):
             .merge(ann, on=keys, how='left')
             .sort_values(['code_bloomberg', 'date'])
         )
-        calendar['date_adj'] = calendar['ANNOUNCEMENT_DT'].fillna(calendar['date'])
+        # Without a usable announcement date, the period end would be a
+        # look-ahead of weeks; use period end + the filing deadline instead,
+        # capped at today (a value Bloomberg returns now is known now).
+        fallback = (
+            calendar['date'] + pd.Timedelta(days=self._QUARTERLY_FALLBACK_LAG_DAYS)
+        ).clip(upper=pd.Timestamp.today().normalize())
+        bad_ann = calendar['ANNOUNCEMENT_DT'].isna() | (
+            calendar['ANNOUNCEMENT_DT'] < calendar['date']
+        )
+        calendar['date_adj'] = calendar['ANNOUNCEMENT_DT'].where(~bad_ann, fallback)
         calendar['date_dif'] = calendar.groupby('code_bloomberg')['date_adj'].diff(1)
         calendar['date_adj'] = np.where(
-            calendar['date_dif'].dt.days < 0, calendar['date'], calendar['date_adj']
+            calendar['date_dif'].dt.days < 0, fallback, calendar['date_adj']
         )
 
         out = (
