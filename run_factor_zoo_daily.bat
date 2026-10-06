@@ -1,17 +1,13 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: Set the Anaconda path
-set "ANACONDA_PATH=C:\Users\Turandot\anaconda3"
-
-:: PerseveraTools project root (must be installed in the active conda env)
+:: PerseveraTools project root
 set "PROJECT_DIR=G:\Drives compartilhados\INVESTIMENTOS\Quant\PerseveraTools"
 
-:: Activate Anaconda environment
-echo Activating Anaconda environment...
-call "%ANACONDA_PATH%\Scripts\activate.bat"
+:: System Python (Microsoft Store 3.11) — persevera_tools is installed here
+where python >nul 2>&1
 if errorlevel 1 (
-    echo Failed to activate Anaconda environment.
+    echo python not found on PATH.
     pause
     exit /b 1
 )
