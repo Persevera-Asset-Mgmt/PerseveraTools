@@ -293,8 +293,10 @@ def check(jobs: list[Job], bp: BloombergProvider, sample: str = "BBAS3") -> int:
         r.columns = [c[1] for c in cols]
         keep = [c for c in r.columns if c.upper() in ("ANNOUNCEMENT_DT", fields[0].upper())]
         r = r[keep].dropna(how="all")
+        # The raw index may hold date objects or strings depending on xbbg.
+        r.index = pd.to_datetime(pd.Index(r.index).astype(str), errors="coerce")
         print(f"\nraw rows of {s} 2016-2019 (columns: {keep})")
-        print(r.loc["2016-01-01":"2019-12-31"].to_string())
+        print(r[(r.index >= "2016-01-01") & (r.index <= "2019-12-31")].to_string())
     # Value rows without a same-date announcement: is there one nearby?
     is_ann = long["field"].astype(str).str.upper() == "ANNOUNCEMENT_DT"
     vals = long[~is_ann & long["value"].notna()][["code_bloomberg", "date"]].drop_duplicates()
