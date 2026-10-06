@@ -285,15 +285,42 @@ def check(jobs: list[Job], bp: BloombergProvider, sample: str = "BBAS3") -> int:
     if len(odd):
         print("sample of non-YYYYMMDD values:")
         print(odd.groupby("code_bloomberg")["value"].agg(["size", "first"]).head(15).to_string())
-    adj = bp._adjust_quarterly_dates(long)
     s = f"{sample} {job.exchange} Equity"
+    # Raw rows of the sample ticker: where do its announcement dates land?
+    cols = [c for c in raw.columns if isinstance(c, tuple) and c[0] == s]
+    if cols:
+        r = raw[cols].copy()
+        r.columns = [c[1] for c in cols]
+        keep = [c for c in r.columns if c.upper() in ("ANNOUNCEMENT_DT", fields[0].upper())]
+        r = r[keep].dropna(how="all")
+        print(f"\nraw rows of {s} 2016-2019 (columns: {keep})")
+        print(r.loc["2016-01-01":"2019-12-31"].to_string())
+    # Value rows without a same-date announcement: is there one nearby?
+    is_ann = long["field"].astype(str).str.upper() == "ANNOUNCEMENT_DT"
+    vals = long[~is_ann & long["value"].notna()][["code_bloomberg", "date"]].drop_duplicates()
+    anns = long[is_ann & long["value"].notna()][["code_bloomberg", "date"]].drop_duplicates()
+    m = vals.merge(anns.assign(same=True), on=["code_bloomberg", "date"], how="left")
+    missing = m[m["same"].isna()][["code_bloomberg", "date"]]
+    near = pd.merge_asof(missing.sort_values("date"), anns.sort_values("date").rename(columns={"date": "ann_row"}),
+                         left_on="date", right_on="ann_row", by="code_bloomberg",
+                         direction="nearest", tolerance=pd.Timedelta(days=10))
+    print(f"\nvalue rows: {len(vals):,} | with same-date announcement: {int(m['same'].notna().sum()):,} "
+          f"| without: {len(missing):,}, of which an announcement row within 10 days: "
+          f"{int(near['ann_row'].notna().sum()):,}")
+    print("days between value row and nearest announcement row:",
+          (near["ann_row"] - near["date"]).dt.days.value_counts().head(8).to_dict())
+    print("dates in the raw index by day of month:",
+          pd.Series(pd.DatetimeIndex(raw.index).day).value_counts().head(8).to_dict())
+
     first_field = next(f for f in fields if f.upper() != "ANNOUNCEMENT_DT")
-    before = long[(long["code_bloomberg"] == s) & (long["field"].astype(str).str.upper() == first_field.upper())]
-    after = adj[(adj["code_bloomberg"] == s) & (adj["field"].astype(str).str.upper() == first_field.upper())]
+    # Carry the bdh period end through the re-dating to pair rows correctly.
+    adj = bp._adjust_quarterly_dates(long.assign(period_end=long["date"]))
+    sel = (adj["code_bloomberg"] == s) & (adj["field"].astype(str).str.upper() == first_field.upper())
     print()
     print(f"{s} {first_field}: period end (bdh) -> stored date")
-    print(pd.DataFrame({"period_end": before["date"].values[:12], "stored_date": after["date"].values[:12],
-                        "value": after["value"].values[:12]}).to_string(index=False))
+    print(adj.loc[sel & adj["value"].notna(), ["period_end", "date", "value"]]
+          .rename(columns={"date": "stored_date"}).sort_values("period_end")
+          .query("period_end >= '2016-01-01' and period_end <= '2019-12-31'").to_string(index=False))
     return 0
 
 

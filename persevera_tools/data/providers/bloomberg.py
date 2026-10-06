@@ -729,8 +729,13 @@ class BloombergProvider(DataProvider):
                 "ANNOUNCEMENT_DT returned but none could be parsed as a date "
                 f"(sample values: {ann_raw['value'].dropna().head(3).tolist()})"
             )
+        # Only (date, ticker) keys that carry a value: in a multi-ticker bdh the
+        # index is the union of every ticker's period ends, so each ticker also
+        # gets empty rows on other tickers' dates. Those must not take part in
+        # the monotonic check below — an empty row's fallback date (+90d) would
+        # push the next real row's announcement date into the fallback too.
         calendar = (
-            df[keys]
+            df.loc[~is_announcement & df['value'].notna(), keys]
             .drop_duplicates()
             .merge(ann, on=keys, how='left')
             .sort_values(['code_bloomberg', 'date'])
