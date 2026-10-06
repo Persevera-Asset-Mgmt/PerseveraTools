@@ -23,6 +23,10 @@ if errorlevel 1 (
 call :run_script -m persevera_tools.data.factor_zoo.company_data
 if errorlevel 1 goto :failed
 
+:: Step 1b: Ticker successions (seed + Fibery "Codigos Anteriores") -> merge old codes
+call :run_script -m persevera_tools.data.factor_zoo.aliases --apply
+if errorlevel 1 goto :failed
+
 :: Step 2: Derived factors — independent phase
 call :run_script -m persevera_tools.data.factor_zoo --phase independent
 if errorlevel 1 goto :failed
