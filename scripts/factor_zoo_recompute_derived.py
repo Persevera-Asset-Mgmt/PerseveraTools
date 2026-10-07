@@ -22,6 +22,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import gc
 import io
 import sys
 import time
@@ -44,6 +45,7 @@ from persevera_tools.db.operations import read_sql  # noqa: E402
 
 SQL_MIN_DATE = "1999-12-31"  # load everything stored (factor_zoo starts in 2000)
 ORDER = list(DERIVED_INDEPENDENT_ORDER) + list(DERIVED_DEPENDENT_ORDER)
+COPY_CHUNK = 1_000_000
 
 
 def derived_fields_in_db() -> list[str]:
@@ -82,10 +84,14 @@ def replace_fields(engine, df: pd.DataFrame) -> tuple[int, int]:
     try:
         cur = raw.cursor()
         cur.execute("CREATE TEMP TABLE _dv (code text, date date, field text, value double precision) ON COMMIT DROP")
-        buf = io.StringIO()
-        df[["code", "date", "field", "value"]].to_csv(buf, index=False, header=False, date_format="%Y-%m-%d")
-        buf.seek(0)
-        cur.copy_expert("COPY _dv (code, date, field, value) FROM STDIN WITH (FORMAT csv)", buf)
+        # COPY in chunks: one CSV buffer for ~30M rows exhausts memory.
+        cols = df[["code", "date", "field", "value"]]
+        for i in range(0, len(cols), COPY_CHUNK):
+            buf = io.StringIO()
+            cols.iloc[i:i + COPY_CHUNK].to_csv(buf, index=False, header=False, date_format="%Y-%m-%d")
+            buf.seek(0)
+            cur.copy_expert("COPY _dv (code, date, field, value) FROM STDIN WITH (FORMAT csv)", buf)
+            del buf
         cur.execute("DELETE FROM factor_zoo WHERE field = ANY(%s)", (fields,))
         deleted = cur.rowcount
         cur.execute("INSERT INTO factor_zoo (code, date, field, value) SELECT code, date, field, value FROM _dv")
@@ -130,6 +136,8 @@ def main(argv=None) -> int:
                 deleted, inserted = replace_fields(engine, df)
                 msg += f" | -{deleted:,} +{inserted:,}"
             print(msg, flush=True)
+            del df
+            gc.collect()
         s = pd.DataFrame(summary)
         if len(s):
             pd.set_option("display.width", 200); pd.set_option("display.max_rows", 300)
