@@ -120,7 +120,18 @@ def main(argv=None) -> int:
         for cat in cats:
             t0 = time.time()
             # upload=False: compute only; output_min_date=None keeps the full history.
-            df = process_category(cat, sql_min_date=SQL_MIN_DATE, output_min_date=None, upload=False)
+            # Long reads occasionally lose the SSL connection; computing has no
+            # side effects, so retry it.
+            for attempt in range(1, 4):
+                try:
+                    df = process_category(cat, sql_min_date=SQL_MIN_DATE, output_min_date=None, upload=False)
+                    break
+                except sqlalchemy.exc.OperationalError as exc:
+                    if attempt == 3:
+                        raise
+                    print(f"{cat}: connection error on read (attempt {attempt}), retrying in 60s: "
+                          f"{str(exc).splitlines()[0][:120]}", flush=True)
+                    time.sleep(60)
             n_raw = len(df)
             df = df.drop_duplicates(["code", "date", "field"], keep="last")
             if len(df) < n_raw:
