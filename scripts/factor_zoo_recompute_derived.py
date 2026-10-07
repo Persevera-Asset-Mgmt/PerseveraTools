@@ -131,10 +131,11 @@ def main(argv=None) -> int:
             for f in fields:
                 summary.append({"category": cat, "field": f, "rows_now": int(before.get(f, 0)),
                                 "rows_new": int(new.get(f, 0)), "codes_new": int(df.loc[df.field == f, "code"].nunique())})
-            msg = f"{cat}: {len(df):,} rows, {len(fields)} fields, computed in {time.time() - t0:.0f}s"
+            msg = f"[{pd.Timestamp.now():%H:%M:%S}] {cat}: {len(df):,} rows, {len(fields)} fields, computed in {time.time() - t0:.0f}s"
             if args.apply and len(df):
+                print(msg + " | writing...", flush=True)
                 deleted, inserted = replace_fields(engine, df)
-                msg += f" | -{deleted:,} +{inserted:,}"
+                msg += f" | -{deleted:,} +{inserted:,} (written at {pd.Timestamp.now():%H:%M:%S})"
             print(msg, flush=True)
             del df
             gc.collect()
