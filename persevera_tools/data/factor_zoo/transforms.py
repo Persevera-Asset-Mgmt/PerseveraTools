@@ -7,7 +7,7 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-from .helpers import carry_to_dates, daily_ffilled_panel
+from .helpers import daily_ffilled_panel
 
 
 def _stack_wide(panel: pd.DataFrame) -> pd.Series:
@@ -345,11 +345,6 @@ _VARIABILITY_FIELDS = [
     "net_revenues_ltm_growth_1y",   # requires compute_ratios_growth upstream
 ]
 
-# Quarterly observations are carried onto the output dates for at most this
-# long (one skipped release plus the usual 90-120 day Q3→Q4 gap).
-_QUARTERLY_MAX_AGE_DAYS = 180
-
-
 def _quarterly_series(data: pd.DataFrame, field: str) -> pd.Series:
     """One field as a (code, date)-indexed series of its own release dates."""
     return (
@@ -376,15 +371,18 @@ def _per_code_rolling(s: pd.Series, *, window: int, min_periods: int, how) -> pd
     return s.groupby(level="code", group_keys=False).transform(roll)
 
 
-def _quarterly_to_long(
-    s: pd.Series, dates: pd.DatetimeIndex, field_label: str
-) -> pd.DataFrame:
-    """Carry a per-code quarterly series onto ``dates`` and return long format."""
+def _quarterly_to_long(s: pd.Series, field_label: str) -> pd.DataFrame:
+    """Per-code quarterly series → long format on each code's own release dates.
+
+    Values are not repeated on other codes' dates: consumers take the last
+    value on or before each date (``scoring.snapshot_*`` forward-fill), so a
+    dense copy only multiplied storage (~20x for quality variability).
+    """
     if s.empty:
         return pd.DataFrame(columns=["code", "date", "field", "value"])
-    sparse = s.unstack(level="code")
-    panel = carry_to_dates(sparse, dates, max_age_days=_QUARTERLY_MAX_AGE_DAYS)
-    return _panel_to_long(panel, dates, field_label)
+    out = s.dropna().rename("value").reset_index()
+    out["field"] = field_label
+    return out[["code", "date", "field", "value"]]
 
 
 def compute_quality_variability(
@@ -397,8 +395,7 @@ def compute_quality_variability(
 
     Computed on each company's quarterly observations (release dates), over
     the last ``rolling_window_years × 4`` quarters with at least
-    ``min_obs_quarters`` of them, then carried onto the field's observation
-    dates for up to ``_QUARTERLY_MAX_AGE_DAYS``.
+    ``min_obs_quarters`` of them, and stored on each company's release dates.
 
     Variants produced for each field in ``_VARIABILITY_FIELDS``:
 
@@ -431,7 +428,6 @@ def compute_quality_variability(
     chunks: List[pd.DataFrame] = []
     for fld in fields_to_run:
         s = _quarterly_series(data, fld)
-        dates = pd.DatetimeIndex(s.index.get_level_values("date").unique()).sort_values()
         base = "revenue_growth" if fld == "net_revenues_ltm_growth_1y" else fld
         for suffix, how in (
             ("variability", "std"),
@@ -441,7 +437,7 @@ def compute_quality_variability(
             rolled = _per_code_rolling(
                 s, window=window, min_periods=min_obs_quarters, how=how
             )
-            chunks.append(_quarterly_to_long(rolled, dates, f"{base}_{suffix}"))
+            chunks.append(_quarterly_to_long(rolled, f"{base}_{suffix}"))
 
     return pd.concat(chunks, ignore_index=True)
 
@@ -595,8 +591,7 @@ def compute_operating_leverage(
         masked to avoid spurious extremes when revenue is nearly flat.
     4.  Raw DOL observations are clipped to ``[−clip_dol, +clip_dol]``.
     5.  Rolling median over the last ``rolling_quarters`` releases (at least
-        ``min_obs_quarters`` valid), carried onto release dates for up to
-        ``_QUARTERLY_MAX_AGE_DAYS``.
+        ``min_obs_quarters`` valid), stored on each company's release dates.
     """
     needed = {"ebit_q", "net_revenues_q"}
     if not needed.issubset(set(data["field"].unique())):
@@ -624,8 +619,7 @@ def compute_operating_leverage(
     dol = _per_code_rolling(
         dol_raw, window=rolling_quarters, min_periods=min_obs_quarters, how="median"
     )
-    dates = pd.DatetimeIndex(rel_dates.unique()).sort_values()
-    return _quarterly_to_long(dol, dates, "operating_leverage")
+    return _quarterly_to_long(dol, "operating_leverage")
 
 
 def compute_value_timeseries(

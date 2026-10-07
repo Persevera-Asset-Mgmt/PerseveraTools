@@ -57,38 +57,3 @@ def daily_ffilled_panel(
     filled = numeric_block.ffill(limit=ffill_limit)
     return filled, pd.DatetimeIndex(idx)
 
-
-def carry_to_dates(
-    sparse: pd.DataFrame,
-    dates: pd.DatetimeIndex,
-    *,
-    max_age_days: int,
-) -> pd.DataFrame:
-    """
-    Forward-fill a sparse panel onto ``dates``, by observation age in days.
-
-    Unlike ``ffill(limit=…)``, the limit is calendar time since each column's
-    last observation, so irregular reporting gaps (e.g. 118 days between Q3
-    and Q4 releases) do not punch holes.
-
-    Parameters
-    ----------
-    sparse
-        Date index; columns are codes; values only on observation dates.
-    dates
-        Output dates.
-    max_age_days
-        Values older than this are dropped (NaN).
-    """
-    idx = sparse.index.union(pd.DatetimeIndex(dates)).sort_values()
-    panel = sparse.reindex(idx)
-    stamps = idx.to_numpy()[:, None]
-    last_obs = pd.DataFrame(
-        np.where(panel.notna().to_numpy(), stamps, np.datetime64("NaT")),
-        index=idx,
-        columns=panel.columns,
-    ).ffill()
-    age = stamps - last_obs.to_numpy(dtype="datetime64[ns]")
-    # NaT ages compare False, so columns never observed stay NaN.
-    fresh = age <= np.timedelta64(max_age_days, "D")
-    return panel.ffill().where(fresh).reindex(pd.DatetimeIndex(dates))
