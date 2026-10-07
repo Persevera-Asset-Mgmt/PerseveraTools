@@ -3,7 +3,7 @@
 Runs every derived category from 2000 with the current transforms, in
 dependency order, and replaces each output field wholesale: a field produced
 by a category is deleted from factor_zoo and rewritten (one transaction per
-category), so rows the new code no longer produces (non-session liquidity
+field), so rows the new code no longer produces (non-session liquidity
 dates, stale quarterly carries, dead codes) do not linger as an upsert would
 leave them.
 
@@ -78,21 +78,33 @@ def backup(engine, fields: list[str], since: str) -> str:
 
 
 def replace_fields(engine, df: pd.DataFrame) -> tuple[int, int]:
-    """Delete every row of df's fields, COPY df in — one transaction."""
-    fields = sorted(df["field"].unique())
+    """Replace each of df's fields wholesale — one transaction per field.
+
+    Per field rather than per category keeps the extra disk needed while the
+    deleted rows are still held by the open transaction small (the managed
+    Postgres goes read-only near a full disk).
+    """
+    deleted = inserted = 0
+    for fld, part in df.groupby("field", sort=True):
+        d, i = _replace_one_field(engine, fld, part[["code", "date", "field", "value"]])
+        deleted += d
+        inserted += i
+    return deleted, inserted
+
+
+def _replace_one_field(engine, fld: str, cols: pd.DataFrame) -> tuple[int, int]:
     raw = engine.raw_connection()
     try:
         cur = raw.cursor()
         cur.execute("CREATE TEMP TABLE _dv (code text, date date, field text, value double precision) ON COMMIT DROP")
-        # COPY in chunks: one CSV buffer for ~30M rows exhausts memory.
-        cols = df[["code", "date", "field", "value"]]
+        # COPY in chunks: one CSV buffer for tens of millions of rows exhausts memory.
         for i in range(0, len(cols), COPY_CHUNK):
             buf = io.StringIO()
             cols.iloc[i:i + COPY_CHUNK].to_csv(buf, index=False, header=False, date_format="%Y-%m-%d")
             buf.seek(0)
             cur.copy_expert("COPY _dv (code, date, field, value) FROM STDIN WITH (FORMAT csv)", buf)
             del buf
-        cur.execute("DELETE FROM factor_zoo WHERE field = ANY(%s)", (fields,))
+        cur.execute("DELETE FROM factor_zoo WHERE field = %s", (fld,))
         deleted = cur.rowcount
         cur.execute("INSERT INTO factor_zoo (code, date, field, value) SELECT code, date, field, value FROM _dv")
         inserted = cur.rowcount
@@ -110,11 +122,12 @@ def main(argv=None) -> int:
     p.add_argument("--apply", action="store_true", help="Write (default: dry run).")
     p.add_argument("--category", action="append", choices=ORDER, help="Only these categories.")
     p.add_argument("--backup-from", default="2024-01-01", help="Back up derived rows from this date on.")
+    p.add_argument("--no-backup", action="store_true", help="Skip the backup table (e.g. disk near full).")
     args = p.parse_args(argv)
     cats = [c for c in ORDER if not args.category or c in args.category]
     engine = get_db_engine()
     try:
-        if args.apply:
+        if args.apply and not args.no_backup:
             backup(engine, derived_fields_in_db(), args.backup_from)
         summary = []
         for cat in cats:
