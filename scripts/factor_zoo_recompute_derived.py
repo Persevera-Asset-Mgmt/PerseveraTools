@@ -7,8 +7,10 @@ category), so rows the new code no longer produces (non-session liquidity
 dates, stale quarterly carries, dead codes) do not linger as an upsert would
 leave them.
 
-Before the first write, every derived field currently in factor_zoo is copied
-to ``factor_zoo_derived_bak_<YYYYMMDD>`` (CREATE TABLE AS SELECT).
+Before the first write, the derived fields currently in factor_zoo from
+``--backup-from`` on (default 2024-01-01) are copied to
+``factor_zoo_derived_bak_<YYYYMMDD>`` (CREATE TABLE AS SELECT) for a
+before/after comparison; earlier history is not backed up.
 
 Usage::
 
@@ -58,7 +60,7 @@ def existing_counts(fields: list[str]) -> pd.Series:
     return r.set_index("field")["n"]
 
 
-def backup(engine, fields: list[str]) -> str:
+def backup(engine, fields: list[str], since: str) -> str:
     name = f"factor_zoo_derived_bak_{pd.Timestamp.today():%Y%m%d}"
     with engine.begin() as conn:
         exists = conn.execute(sqlalchemy.text("SELECT to_regclass(:n) IS NOT NULL"), {"n": name}).scalar()
@@ -66,7 +68,8 @@ def backup(engine, fields: list[str]) -> str:
             print(f"Backup table {name} already exists; keeping it.", flush=True)
             return name
         conn.execute(sqlalchemy.text(
-            f"CREATE TABLE {name} AS SELECT * FROM factor_zoo WHERE field = ANY(:f)"), {"f": fields})
+            f"CREATE TABLE {name} AS SELECT * FROM factor_zoo WHERE field = ANY(:f) AND date >= :d"),
+            {"f": fields, "d": since})
         n = conn.execute(sqlalchemy.text(f"SELECT count(*) FROM {name}")).scalar()
     print(f"Backup: {n:,} rows copied to {name}", flush=True)
     return name
@@ -100,12 +103,13 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--apply", action="store_true", help="Write (default: dry run).")
     p.add_argument("--category", action="append", choices=ORDER, help="Only these categories.")
+    p.add_argument("--backup-from", default="2024-01-01", help="Back up derived rows from this date on.")
     args = p.parse_args(argv)
     cats = [c for c in ORDER if not args.category or c in args.category]
     engine = get_db_engine()
     try:
         if args.apply:
-            backup(engine, derived_fields_in_db())
+            backup(engine, derived_fields_in_db(), args.backup_from)
         summary = []
         for cat in cats:
             t0 = time.time()
