@@ -34,22 +34,25 @@ def _panel_to_long(
 
 def compute_price_momentum(data: pd.DataFrame) -> pd.DataFrame:
     temp_pivot = data.pivot(index="date", columns="code", values="value")
+    # Prices are carried for at most 21 days; pct_change must not fill again
+    # (its default fill_method='pad' froze a delisted code's last price and
+    # emitted momentum = 0 on every later date).
     temp, orig_idx = daily_ffilled_panel(temp_pivot, ffill_limit=21)
     chunks: List[pd.DataFrame] = []
     for horizon in [1, 3, 6, 9, 12]:
-        shifted = temp.pct_change(periods=1, freq=f"{30 * horizon}D").multiply(100)
+        shifted = temp.pct_change(periods=1, freq=f"{30 * horizon}D", fill_method=None).multiply(100)
         chunks.append(_panel_to_long(shifted, orig_idx, f"momentum_{horizon}m"))
 
     for horizon in [3, 6, 9, 12]:
         shifted = (
-            temp.pct_change(periods=1, freq=f"{30 * (horizon - 1)}D")
+            temp.pct_change(periods=1, freq=f"{30 * (horizon - 1)}D", fill_method=None)
             .shift(30)
             .multiply(100)
         )
         chunks.append(_panel_to_long(shifted, orig_idx, f"momentum_{horizon}m1"))
 
     for days in [7, 14]:
-        shifted = temp.pct_change(periods=1, freq=f"{days}D").multiply(100)
+        shifted = temp.pct_change(periods=1, freq=f"{days}D", fill_method=None).multiply(100)
         chunks.append(_panel_to_long(shifted, orig_idx, f"momentum_{days}d"))
 
     return pd.concat(chunks, ignore_index=True)
