@@ -56,3 +56,4 @@ def daily_ffilled_panel(
     numeric_block = combined.drop(columns=["_pz_position_"]).apply(pd.to_numeric, errors="coerce")
     filled = numeric_block.ffill(limit=ffill_limit)
     return filled, pd.DatetimeIndex(idx)
+

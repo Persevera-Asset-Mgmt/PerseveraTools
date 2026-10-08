@@ -8,6 +8,7 @@ import multiprocessing
 import time
 from typing import Dict, Iterable, Literal, Mapping, Sequence
 
+import numpy as np
 import pandas as pd
 
 from ...db.operations import read_sql, to_sql
@@ -112,13 +113,19 @@ def load_factor_slice(
         f"WHERE field IN {in_clause} AND date > :md "
         "ORDER BY date, field, code"
     )
-    return read_sql(query, params={"md": sql_min_date}, date_columns=["date"])
+    # raise_errors: a failed read must not be mistaken for "no rows" and skipped.
+    return read_sql(
+        query, params={"md": sql_min_date}, date_columns=["date"], raise_errors=True
+    )
 
 
 def finalize_derived(df: pd.DataFrame, *, output_min_date: str | None = "2024-01-01") -> pd.DataFrame:
     if df.empty:
         return df.copy()
     out = df.sort_values(["date", "field", "code"]).copy()
+    # NaN/±inf carry no information; storing them only bloats factor_zoo.
+    out["value"] = pd.to_numeric(out["value"], errors="coerce")
+    out = out[np.isfinite(out["value"])]
     out["value"] = out["value"].round(5)
     if output_min_date:
         thresh = pd.Timestamp(output_min_date)

@@ -1,17 +1,13 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: Set the Anaconda path
-set "ANACONDA_PATH=C:\Users\Turandot\anaconda3"
-
-:: PerseveraTools project root (must be installed in the active conda env)
+:: PerseveraTools project root
 set "PROJECT_DIR=G:\Drives compartilhados\INVESTIMENTOS\Quant\PerseveraTools"
 
-:: Activate Anaconda environment
-echo Activating Anaconda environment...
-call "%ANACONDA_PATH%\Scripts\activate.bat"
+:: System Python (Microsoft Store 3.11) — persevera_tools is installed here
+where python >nul 2>&1
 if errorlevel 1 (
-    echo Failed to activate Anaconda environment.
+    echo python not found on PATH.
     pause
     exit /b 1
 )
@@ -24,15 +20,19 @@ if errorlevel 1 (
 )
 
 :: Step 1: Bloomberg company data (raw inputs) -> factor_zoo
-call :run_script examples\run_factor_zoo_company_data.py
+call :run_script -m persevera_tools.data.factor_zoo.company_data
+if errorlevel 1 goto :failed
+
+:: Step 1b: Ticker successions (seed + Fibery "Codigos Anteriores") -> merge old codes
+call :run_script -m persevera_tools.data.factor_zoo.aliases --apply
 if errorlevel 1 goto :failed
 
 :: Step 2: Derived factors — independent phase
-call :run_script examples\run_factor_zoo_pipeline.py --phase independent
+call :run_script -m persevera_tools.data.factor_zoo --phase independent
 if errorlevel 1 goto :failed
 
 :: Step 3: Derived factors — dependent phase (requires step 2 uploaded)
-call :run_script examples\run_factor_zoo_pipeline.py --phase dependent
+call :run_script -m persevera_tools.data.factor_zoo --phase dependent
 if errorlevel 1 goto :failed
 
 echo.

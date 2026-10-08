@@ -34,22 +34,25 @@ def _panel_to_long(
 
 def compute_price_momentum(data: pd.DataFrame) -> pd.DataFrame:
     temp_pivot = data.pivot(index="date", columns="code", values="value")
+    # Prices are carried for at most 21 days; pct_change must not fill again
+    # (its default fill_method='pad' froze a delisted code's last price and
+    # emitted momentum = 0 on every later date).
     temp, orig_idx = daily_ffilled_panel(temp_pivot, ffill_limit=21)
     chunks: List[pd.DataFrame] = []
     for horizon in [1, 3, 6, 9, 12]:
-        shifted = temp.pct_change(periods=1, freq=f"{30 * horizon}D").multiply(100)
+        shifted = temp.pct_change(periods=1, freq=f"{30 * horizon}D", fill_method=None).multiply(100)
         chunks.append(_panel_to_long(shifted, orig_idx, f"momentum_{horizon}m"))
 
     for horizon in [3, 6, 9, 12]:
         shifted = (
-            temp.pct_change(periods=1, freq=f"{30 * (horizon - 1)}D")
+            temp.pct_change(periods=1, freq=f"{30 * (horizon - 1)}D", fill_method=None)
             .shift(30)
             .multiply(100)
         )
         chunks.append(_panel_to_long(shifted, orig_idx, f"momentum_{horizon}m1"))
 
     for days in [7, 14]:
-        shifted = temp.pct_change(periods=1, freq=f"{days}D").multiply(100)
+        shifted = temp.pct_change(periods=1, freq=f"{days}D", fill_method=None).multiply(100)
         chunks.append(_panel_to_long(shifted, orig_idx, f"momentum_{days}d"))
 
     return pd.concat(chunks, ignore_index=True)
@@ -82,51 +85,126 @@ def compute_short_selling(data: pd.DataFrame) -> pd.DataFrame:
     return long_df
 
 
-def compute_liquidity(data: pd.DataFrame) -> pd.DataFrame:
-    field_names = sorted(data["field"].dropna().unique().tolist())
-    temp = data.pivot(index=["field", "date"], columns="code", values="value")
+# ── Liquidity ─────────────────────────────────────────────────────────────────
+
+_B3_CODE_RE = r"^[A-Z0-9]{4}\d{1,2}B?$"
+_LIQUIDITY_WINDOWS = (7, 14, 21, 63, 252)
+_LIQUIDITY_DELTA_WINDOWS = (7, 14, 21)
+
+
+def _exchange_calendar(present: pd.DataFrame, *, min_share: float) -> pd.DatetimeIndex:
+    """Sessions where at least ``min_share`` of listed codes have a print.
+
+    ``present`` is a date × code boolean panel for one exchange. A code counts
+    as listed between its first and last print, so holidays (no prints) drop
+    out while thin early years (few listed codes) still qualify.
+    """
+    first = present.idxmax()
+    last = present[::-1].idxmax()
+    d = present.index.to_numpy()[:, None]
+    listed = (d >= first.to_numpy()[None, :]) & (d <= last.to_numpy()[None, :])
+    share = present.sum(axis=1) / np.maximum(listed.sum(axis=1), 1)
+    return present.index[share.to_numpy() >= min_share]
+
+
+def _listed_mask(
+    present: pd.DataFrame, calendar: pd.DatetimeIndex, *, still_listed_days: int
+) -> pd.DataFrame:
+    """Calendar × code mask from first print to delisting.
+
+    A code whose last print is within ``still_listed_days`` of the calendar
+    end is treated as still listed, so recent no-trade sessions count.
+    """
+    pres = present.reindex(calendar, fill_value=False)
+    has = pres.any()
+    first = pres.idxmax().where(has)
+    last = pres[::-1].idxmax().where(has)
+    end = calendar.max()
+    last = last.where(last < end - pd.Timedelta(days=still_listed_days), end)
+    d = calendar.to_numpy()[:, None]
+    mask = (d >= pd.to_datetime(first).to_numpy()[None, :]) & (
+        d <= pd.to_datetime(last).to_numpy()[None, :]
+    )
+    return pd.DataFrame(mask, index=calendar, columns=present.columns)
+
+
+def compute_liquidity(
+    data: pd.DataFrame,
+    *,
+    min_session_share: float = 0.5,
+    still_listed_days: int = 30,
+    min_coverage: float = 0.8,
+) -> pd.DataFrame:
+    """Rolling median volumes on each exchange's trading calendar.
+
+    - Windows count sessions of the code's own exchange (B3 tickers vs US),
+      not rows of the mixed BZ+US date union.
+    - A session without a print while the code is listed counts as zero
+      volume, so illiquid names are not flattered.
+    - A window needs ``min_coverage`` of its sessions inside the listing
+      period (e.g. 202 of 252), instead of a single observation.
+    """
+    vals = data.dropna(subset=["value"])
+    present_all = (
+        vals.assign(_one=1)
+        .pivot_table(index="date", columns="code", values="_one", aggfunc="max")
+        .notna()
+    )
+    exchange = pd.Series(
+        np.where(present_all.columns.str.match(_B3_CODE_RE), "BZ", "US"),
+        index=present_all.columns,
+    )
+    field_names = sorted(vals["field"].unique().tolist())
 
     chunks: List[pd.DataFrame] = []
-    for fld in field_names:
-        fld_panel = temp.loc[fld]
-        for window in [7, 14, 21, 63, 252]:
-            rolled = fld_panel.rolling(window=window, min_periods=1).median()
-            name = (
-                f"median_volume_traded_{window}d"
-                if fld == "num_shares_traded"
-                else f"median_dollar_volume_traded_{window}d"
+    for _, codes in exchange.groupby(exchange):
+        present = present_all[codes.index]
+        present = present[present.any(axis=1)]
+        calendar = _exchange_calendar(present, min_share=min_session_share)
+        listed = _listed_mask(present, calendar, still_listed_days=still_listed_days)
+
+        medians: dict[tuple[str, int], pd.DataFrame] = {}
+        for fld in field_names:
+            panel = (
+                vals[vals["field"] == fld]
+                .pivot_table(index="date", columns="code", values="value", aggfunc="last")
+                .reindex(index=calendar, columns=codes.index)
+                .fillna(0.0)
+                .where(listed)
             )
-            stacked = _stack_wide(rolled)
-            stacked.name = "value"
-            one = stacked.reset_index()
-            one.columns = ["date", "code", "value"]
-            one["field"] = name
-            chunks.append(one[["code", "date", "field", "value"]])
+            prefix = (
+                "median_volume_traded"
+                if fld == "num_shares_traded"
+                else "median_dollar_volume_traded"
+            )
+            for window in _LIQUIDITY_WINDOWS:
+                rolled = panel.rolling(
+                    window=window, min_periods=int(np.ceil(min_coverage * window))
+                ).median().where(listed)
+                medians[(prefix, window)] = rolled
+                chunks.append(_panel_to_long(rolled, calendar, f"{prefix}_{window}d"))
 
-    merged = pd.concat(chunks, ignore_index=True)
+        for window in _LIQUIDITY_DELTA_WINDOWS:
+            for prefix, out_prefix in (
+                ("median_dollar_volume_traded", "delta_dollar_volume"),
+                ("median_volume_traded", "delta_volume"),
+            ):
+                if (prefix, window) not in medians:
+                    continue
+                ratio = medians[(prefix, window)] / medians[(prefix, 63)]
+                chunks.append(
+                    _panel_to_long(ratio, calendar, f"{out_prefix}_{window}d_63d")
+                )
 
-    wide = merged.pivot(index=["code", "date"], columns="field", values="value")
-    for window in [7, 14, 21]:
-        pair = wide.eval(
-            f"""
-            delta_dollar_volume_{window}d_63d = median_dollar_volume_traded_{window}d \
-                / median_dollar_volume_traded_63d
-            delta_volume_{window}d_63d = median_volume_traded_{window}d \
-                / median_volume_traded_63d
-            """
-        )
-        sub_cols = [
-            f"delta_dollar_volume_{window}d_63d",
-            f"delta_volume_{window}d_63d",
-        ]
-        sub = pair[sub_cols]
-        stacked = _stack_wide(sub)
-        stacked.name = "value"
-        extra = stacked.reset_index()
-        extra.columns = ["code", "date", "field", "value"]
-        merged = pd.concat([merged, extra], ignore_index=True)
+    if not chunks:
+        return pd.DataFrame(columns=["code", "date", "field", "value"])
+    out = pd.concat(chunks, ignore_index=True)
+    return out[np.isfinite(pd.to_numeric(out["value"], errors="coerce"))]
 
-    return merged
+
+# Level fields (currency amounts) grow in percent; ratio fields (margins,
+# returns) change in percentage points.
+_PCT_GROWTH_FIELDS = frozenset({"net_revenues_ltm"})
 
 
 def compute_ratios_growth(data: pd.DataFrame) -> pd.DataFrame:
@@ -137,7 +215,13 @@ def compute_ratios_growth(data: pd.DataFrame) -> pd.DataFrame:
     for fld in uniq_fields:
         temp_field = temp_pivot.loc[fld]
         densified, obs_idx = daily_ffilled_panel(temp_field, ffill_limit=360)
-        shifted = densified.diff(360).reindex(obs_idx)
+        if fld in _PCT_GROWTH_FIELDS:
+            base = densified.shift(360)
+            shifted = (
+                (densified - base) / base.abs().replace(0, np.nan) * 100
+            ).reindex(obs_idx)
+        else:
+            shifted = densified.diff(360).reindex(obs_idx)
         stacked = _stack_wide(shifted)
         stacked.name = "value"
         blk = stacked.reset_index()
@@ -164,10 +248,16 @@ def compute_value(data: pd.DataFrame) -> pd.DataFrame:
         temp[available] = temp.groupby(level=0)[available].transform(
             lambda df: df.ffill(limit=252)
         )
+    # Per-share yields divide by the split-only adjusted price: Bloomberg
+    # per-share fields are split-adjusted but not dividend-adjusted, while
+    # price_close is total-return adjusted. Codes without the split-adjusted
+    # price get NaN rather than a biased yield.
+    if "price_close_split_adj" not in temp.columns:
+        temp["price_close_split_adj"] = np.nan
     r = temp.eval(
         """
-        earnings_yield_fwd = earnings_per_share_fwd / price_close
-        book_yield_fwd = book_value_per_share_fwd / price_close
+        earnings_yield_fwd = earnings_per_share_fwd / price_close_split_adj
+        book_yield_fwd = book_value_per_share_fwd / price_close_split_adj
         book_yield_ltm = total_equity / market_cap
         fcf_yield_fwd = free_cash_flow_fwd / ev
         ebit_yield_fwd = ebit_fwd / ev
@@ -255,12 +345,44 @@ _VARIABILITY_FIELDS = [
     "net_revenues_ltm_growth_1y",   # requires compute_ratios_growth upstream
 ]
 
-# Suffix → rolling function factory
-_VARIABILITY_VARIANTS = {
-    "variability":          lambda w, m: {"func": "std",     "window": w, "min_periods": m},
-    "trend_deviation":      None,   # handled separately via .apply(_trend_se)
-    "downside_variability": None,   # handled separately via .apply(_downside_std)
-}
+def _quarterly_series(data: pd.DataFrame, field: str) -> pd.Series:
+    """One field as a (code, date)-indexed series of its own release dates."""
+    return (
+        data[data["field"] == field]
+        .dropna(subset=["value"])
+        .drop_duplicates(["code", "date"], keep="last")
+        .set_index(["code", "date"])["value"]
+        .astype(float)
+        .sort_index()
+    )
+
+
+def _per_code_rolling(s: pd.Series, *, window: int, min_periods: int, how) -> pd.Series:
+    """Rolling statistic over each code's last ``window`` observations."""
+
+    def roll(x: pd.Series) -> pd.Series:
+        r = x.rolling(window=window, min_periods=min_periods)
+        if how == "std":
+            return r.std()
+        if how == "median":
+            return r.median()
+        return r.apply(how, raw=True)
+
+    return s.groupby(level="code", group_keys=False).transform(roll)
+
+
+def _quarterly_to_long(s: pd.Series, field_label: str) -> pd.DataFrame:
+    """Per-code quarterly series → long format on each code's own release dates.
+
+    Values are not repeated on other codes' dates: consumers take the last
+    value on or before each date (``scoring.snapshot_*`` forward-fill), so a
+    dense copy only multiplied storage (~20x for quality variability).
+    """
+    if s.empty:
+        return pd.DataFrame(columns=["code", "date", "field", "value"])
+    out = s.dropna().rename("value").reset_index()
+    out["field"] = field_label
+    return out[["code", "date", "field", "value"]]
 
 
 def compute_quality_variability(
@@ -271,88 +393,51 @@ def compute_quality_variability(
 ) -> pd.DataFrame:
     """Rolling variability metrics for Quality factor (three variants per field).
 
+    Computed on each company's quarterly observations (release dates), over
+    the last ``rolling_window_years × 4`` quarters with at least
+    ``min_obs_quarters`` of them, and stored on each company's release dates.
+
     Variants produced for each field in ``_VARIABILITY_FIELDS``:
 
     ``{field}_variability``
-        Rolling standard deviation (σ).  Simple and fast.  Equivalent to the
-        AQR *Quality Minus Junk* approach.
+        Rolling standard deviation (σ).  Equivalent to the AQR *Quality Minus
+        Junk* approach.
 
     ``{field}_trend_deviation``
-        Standard error of OLS residuals from ŷ = α + β·t fitted on each
-        rolling window.  Does not penalise steady secular improvement.
+        Standard error of OLS residuals from ŷ = α + β·t (t in quarters) on
+        each rolling window.  Does not penalise steady secular improvement.
         Closest to the MSCI Quality Index methodology.
 
     ``{field}_downside_variability``
         Square root of mean squared *negative* deviations from the period
-        mean.  Penalises downside surprises only; benign upside variance is
-        ignored.
-
-    Parameters
-    ----------
-    rolling_window_years:
-        Look-back in years (converted to ``rolling_window_years × 360`` daily
-        rows on the forward-filled panel, matching the convention used in
-        ``compute_value_timeseries``).
-    min_obs_quarters:
-        Minimum number of quarterly observations required before a value is
-        emitted (converted to ``min_obs_quarters × 90`` daily rows).
+        mean.  Penalises downside surprises only.
 
     Pipeline note
     -------------
-    To obtain ``net_revenues_ltm_growth_1y_variability`` (revenue growth
-    variability), this function must be called *after*
-    ``compute_ratios_growth`` has been applied to the data so that the
-    ``net_revenues_ltm_growth_1y`` field is present.  Fields absent from
-    ``data`` are silently skipped.
+    ``net_revenues_ltm_growth_1y`` (percent, from ``compute_ratios_growth``)
+    yields the ``revenue_growth_*`` outputs.  Fields absent from ``data`` are
+    silently skipped.
     """
-    window = rolling_window_years * 360
-    min_periods = min_obs_quarters * 90
+    window = rolling_window_years * 4
 
     avail = set(data["field"].unique())
     fields_to_run = [f for f in _VARIABILITY_FIELDS if f in avail]
     if not fields_to_run:
         return pd.DataFrame(columns=["code", "date", "field", "value"])
 
-    temp_pivot = data[data["field"].isin(fields_to_run)].pivot(
-        index=["field", "date"], columns="code", values="value"
-    )
-
     chunks: List[pd.DataFrame] = []
     for fld in fields_to_run:
-        fld_panel = temp_pivot.loc[fld]
-        # ffill_limit=90: carry quarterly snapshot forward for ≤1 quarter
-        densified, obs_idx = daily_ffilled_panel(fld_panel, ffill_limit=90)
-
-        # 1. Simple rolling σ
-        rolled_std = densified.rolling(window=window, min_periods=min_periods).std()
-        out_name = (
-            "revenue_growth_variability"
-            if fld == "net_revenues_ltm_growth_1y"
-            else f"{fld}_variability"
-        )
-        chunks.append(_panel_to_long(rolled_std, obs_idx, out_name))
-
-        # 2. Trend deviation (SE of OLS residuals) — via rolling .apply
-        rolled_td = densified.rolling(
-            window=window, min_periods=min_periods
-        ).apply(_trend_se, raw=True)
-        td_name = (
-            "revenue_growth_trend_deviation"
-            if fld == "net_revenues_ltm_growth_1y"
-            else f"{fld}_trend_deviation"
-        )
-        chunks.append(_panel_to_long(rolled_td, obs_idx, td_name))
-
-        # 3. Downside semi-standard deviation
-        rolled_ds = densified.rolling(
-            window=window, min_periods=min_periods
-        ).apply(_downside_std, raw=True)
-        ds_name = (
-            "revenue_growth_downside_variability"
-            if fld == "net_revenues_ltm_growth_1y"
-            else f"{fld}_downside_variability"
-        )
-        chunks.append(_panel_to_long(rolled_ds, obs_idx, ds_name))
+        s = _quarterly_series(data, fld)
+        base = "revenue_growth" if fld == "net_revenues_ltm_growth_1y" else fld
+        for suffix, how in (
+            ("variability", "std"),
+            ("trend_deviation", _trend_se),
+            ("downside_variability", _downside_std),
+        ):
+            rolled = _per_code_rolling(
+                s, window=window, min_periods=min_obs_quarters, how=how
+            )
+            chunks.append(_quarterly_to_long(rolled, f"{base}_{suffix}"))
 
     return pd.concat(chunks, ignore_index=True)
 
@@ -497,71 +582,44 @@ def compute_operating_leverage(
 
     Implementation
     --------------
-    1.  Both ``ebit_q`` and ``net_revenues_q`` are forward-filled for at most
-        100 days (within-quarter carry) to align the quarterly reporting
-        cadence to a daily panel.
-    2.  Quarter-over-quarter percentage changes are computed as 90-day diffs
-        on the daily panel.
+    1.  Works on each company's quarterly releases (``ebit_q`` and
+        ``net_revenues_q`` reported together).
+    2.  Changes are year-over-year (same quarter, 4 releases back), which
+        removes seasonality; pairs whose release dates are not 300–430 days
+        apart (missing quarters) are dropped.
     3.  Revenue changes below ``min_rev_change_pct``% in absolute value are
-        masked (NaN) to avoid noise-driven outliers when revenue is nearly
-        flat — a small EBIT move divided by a near-zero revenue move would
-        produce a spurious and very large DOL.
-    4.  Raw DOL observations are clipped to ``[−clip_dol, +clip_dol]`` before
-        taking the rolling median, further dampening outlier influence.
-    5.  A rolling median over ``rolling_quarters × 90`` days is taken as the
-        final estimate.
-
-    Parameters
-    ----------
-    rolling_quarters:
-        Number of quarterly observations in the rolling window (default 8 = 2
-        years).
-    min_obs_quarters:
-        Minimum non-NaN quarterly observations required to emit a value.
-    clip_dol:
-        Absolute cap on individual quarterly DOL observations before rolling.
-    min_rev_change_pct:
-        Minimum absolute revenue QoQ change (in %) below which the
-        observation is treated as NaN.
+        masked to avoid spurious extremes when revenue is nearly flat.
+    4.  Raw DOL observations are clipped to ``[−clip_dol, +clip_dol]``.
+    5.  Rolling median over the last ``rolling_quarters`` releases (at least
+        ``min_obs_quarters`` valid), stored on each company's release dates.
     """
     needed = {"ebit_q", "net_revenues_q"}
     if not needed.issubset(set(data["field"].unique())):
         return pd.DataFrame(columns=["code", "date", "field", "value"])
 
-    temp_pivot = data[data["field"].isin(needed)].pivot(
-        index=["field", "date"], columns="code", values="value"
-    )
+    wide = pd.concat(
+        {f: _quarterly_series(data, f) for f in sorted(needed)}, axis=1
+    ).dropna()
+    if wide.empty:
+        return pd.DataFrame(columns=["code", "date", "field", "value"])
 
-    ebit_panel = temp_pivot.loc["ebit_q"]
-    rev_panel = temp_pivot.loc["net_revenues_q"]
+    by_code = wide.groupby(level="code")
+    rel_dates = pd.Series(wide.index.get_level_values("date"), index=wide.index)
+    gap_days = (rel_dates - rel_dates.groupby(level="code").shift(4)).dt.days
+    yoy = gap_days.between(300, 430)
 
-    ebit_dense, obs_idx = daily_ffilled_panel(ebit_panel, ffill_limit=100)
-    rev_dense, _ = daily_ffilled_panel(rev_panel, ffill_limit=100)
+    rev_prev = by_code["net_revenues_q"].shift(4)
+    ebit_prev = by_code["ebit_q"].shift(4)
+    rev_pct = (wide["net_revenues_q"] - rev_prev) / rev_prev.abs().replace(0, np.nan) * 100
+    ebit_pct = (wide["ebit_q"] - ebit_prev) / ebit_prev.abs().replace(0, np.nan) * 100
 
-    # Align panels to the same date index
-    common_idx = ebit_dense.index.intersection(rev_dense.index)
-    ebit_dense = ebit_dense.reindex(common_idx)
-    rev_dense = rev_dense.reindex(common_idx)
-
-    # QoQ pct change via 90-day diff on the forward-filled daily panel
-    rev_prev = rev_dense.shift(90)
-    ebit_prev = ebit_dense.shift(90)
-
-    rev_pct = (rev_dense - rev_prev) / rev_prev.abs().replace(0, np.nan) * 100
-    ebit_pct = (ebit_dense - ebit_prev) / ebit_prev.abs().replace(0, np.nan) * 100
-
-    # Mask near-zero revenue changes to avoid noise-driven extremes
-    rev_safe = rev_pct.where(rev_pct.abs() >= min_rev_change_pct)
-
-    # Raw DOL: clip before rolling to dampen single-quarter outliers
+    rev_safe = rev_pct.where(yoy & (rev_pct.abs() >= min_rev_change_pct))
     dol_raw = (ebit_pct / rev_safe).clip(-clip_dol, clip_dol)
 
-    # Rolling median over rolling_quarters quarters
-    window = rolling_quarters * 90
-    min_periods = min_obs_quarters * 90
-    dol_rolling = dol_raw.rolling(window=window, min_periods=min_periods).median()
-
-    return _panel_to_long(dol_rolling, obs_idx, "operating_leverage")
+    dol = _per_code_rolling(
+        dol_raw, window=rolling_quarters, min_periods=min_obs_quarters, how="median"
+    )
+    return _quarterly_to_long(dol, "operating_leverage")
 
 
 def compute_value_timeseries(

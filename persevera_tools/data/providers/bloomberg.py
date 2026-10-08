@@ -85,6 +85,30 @@ def _coerce_bdh_dates(dates: pd.Series) -> pd.Series:
     return parsed
 
 
+def _parse_announcement_dates(values: pd.Series) -> pd.Series:
+    """Parse ANNOUNCEMENT_DT values one by one.
+
+    Numbers (int, float such as 20180222.0, or numeric strings) are read as
+    YYYYMMDD; anything else (date strings, datetimes) goes through
+    ``pd.to_datetime``. Unlike ``_coerce_bdh_dates`` — which picks one format
+    for the whole batch — a few odd values can't turn every date into an
+    epoch-nanosecond 1970 timestamp; out-of-range numbers become NaT.
+    """
+    out = pd.Series(pd.NaT, index=values.index, dtype='datetime64[ns]')
+    obj = values.astype(object)
+    is_dt = obj.map(lambda v: isinstance(v, (pd.Timestamp, datetime, np.datetime64)))
+    num = pd.to_numeric(obj.where(~is_dt), errors='coerce')
+    yyyymmdd = num.between(19000101, 21001231)
+    if yyyymmdd.any():
+        out[yyyymmdd] = pd.to_datetime(
+            num[yyyymmdd].round().astype('int64').astype(str), format='%Y%m%d', errors='coerce'
+        )
+    other = obj.notna() & num.isna()
+    if other.any():
+        out[other] = pd.to_datetime(obj[other], errors='coerce')
+    return out
+
+
 def _map_bloomberg_fields(series: pd.Series, field_list: Dict[str, str]) -> pd.Series:
     """Map Bloomberg field codes to mnemonics, case-insensitively.
 
@@ -119,6 +143,29 @@ class BloombergProvider(DataProvider):
         'Trimestral': 'quarterly',
         'Consenso': 'consensus',
     }
+
+    # Explicit bdh adjustment elements, so stored history never depends on the
+    # Terminal user's DPDF<GO> settings. Total-return categories adjust prices
+    # for dividends and splits (momentum, price range); everything else is
+    # split-adjusted only, the same basis as Bloomberg per-share fields
+    # (EPS, BPS) — price_close_split_adj lives in its own category for that.
+    _TOTAL_RETURN_CATEGORIES = frozenset({'market'})
+    _ADJUST_TOTAL_RETURN = {
+        'adjustmentNormal': True,
+        'adjustmentAbnormal': True,
+        'adjustmentSplit': True,
+        'adjustmentFollowDPDF': False,
+    }
+    _ADJUST_SPLIT_ONLY = {
+        'adjustmentNormal': False,
+        'adjustmentAbnormal': False,
+        'adjustmentSplit': True,
+        'adjustmentFollowDPDF': False,
+    }
+
+    # Fallback availability lag for quarterly data without a usable
+    # ANNOUNCEMENT_DT: period end + 90 days (CVM DFP deadline; ITR is 45).
+    _QUARTERLY_FALLBACK_LAG_DAYS = 90
 
     _DEFAULT_MARKET_FIELDS = {'PX_LAST': 'close'}
     _CATEGORY_EXTRA_MARKET_FIELDS: Dict[str, Dict[str, str]] = {
@@ -486,6 +533,7 @@ class BloombergProvider(DataProvider):
         frequency = self.frequencies.get(category)
         
         all_data = []
+        failed_exchanges: Dict[str, str] = {}
         for exchange in exchanges:
             self.logger.info(f"Processing exchange: {exchange}")
             
@@ -509,21 +557,33 @@ class BloombergProvider(DataProvider):
                         index_list=index_list
                     )
                 else:
+                    adjustment = (
+                        self._ADJUST_TOTAL_RETURN
+                        if category in self._TOTAL_RETURN_CATEGORIES
+                        else self._ADJUST_SPLIT_ONLY
+                    )
                     df = self._get_regular_company_data(
                         securities_list=securities_list,
                         field_list=field_list,
                         frequency=frequency,
                         exchange=exchange if use_fund_currency else None,
                         best_fperiod_override=best_fperiod_override,
-                        **kwargs
+                        **{**adjustment, **kwargs}
                     )
                     
                 all_data.append(df)
                 
             except Exception as e:
                 self.logger.error(f"Error processing {exchange}: {str(e)}")
+                failed_exchanges[exchange] = str(e)
                 continue
-                
+
+        # A partial result (one exchange missing) must fail too; otherwise it is
+        # saved and downstream steps run on incomplete data.
+        if failed_exchanges:
+            raise DataRetrievalError(
+                f"{category}: failed for exchange(s) {failed_exchanges}"
+            )
         if not all_data:
             raise DataRetrievalError("No data retrieved from any exchange")
             
@@ -652,25 +712,60 @@ class BloombergProvider(DataProvider):
         keys = ['date', 'code_bloomberg']
         # xbbg lowercases field names (announcement_dt); compare case-insensitively.
         is_announcement = df['field'].astype('string').str.upper() == 'ANNOUNCEMENT_DT'
+        ann_raw = df.loc[is_announcement, keys + ['value']]
+        # The value format depends on the xbbg version (YYYYMMDD int, float
+        # such as 20180222.0, date string or datetime); a fixed '%Y%m%d'
+        # parse silently returned NaT for all of them under xbbg 0.12.
+        parsed = _parse_announcement_dates(ann_raw['value'])
         ann = (
-            df.loc[is_announcement, keys + ['value']]
-            .assign(
-                ANNOUNCEMENT_DT=lambda x: pd.to_datetime(
-                    x['value'], format='%Y%m%d', errors='coerce'
-                )
-            )[keys + ['ANNOUNCEMENT_DT']]
+            ann_raw.assign(ANNOUNCEMENT_DT=parsed.values)
+            [keys + ['ANNOUNCEMENT_DT']]
             .drop_duplicates(keys)
         )
+        n_raw = int(ann_raw['value'].notna().sum())
+        n_parsed = int(parsed.notna().sum())
+        if n_raw and not n_parsed:
+            raise DataRetrievalError(
+                "ANNOUNCEMENT_DT returned but none could be parsed as a date "
+                f"(sample values: {ann_raw['value'].dropna().head(3).tolist()})"
+            )
+        # Only (date, ticker) keys that carry a value: in a multi-ticker bdh the
+        # index is the union of every ticker's period ends, so each ticker also
+        # gets empty rows on other tickers' dates. Those must not take part in
+        # the monotonic check below — an empty row's fallback date (+90d) would
+        # push the next real row's announcement date into the fallback too.
         calendar = (
-            df[keys]
+            df.loc[~is_announcement & df['value'].notna(), keys]
             .drop_duplicates()
             .merge(ann, on=keys, how='left')
             .sort_values(['code_bloomberg', 'date'])
         )
-        calendar['date_adj'] = calendar['ANNOUNCEMENT_DT'].fillna(calendar['date'])
+        # Without a usable announcement date, the period end would be a
+        # look-ahead of weeks; use period end + the filing deadline instead,
+        # capped at today (a value Bloomberg returns now is known now).
+        fallback = (
+            calendar['date'] + pd.Timedelta(days=self._QUARTERLY_FALLBACK_LAG_DAYS)
+        ).clip(upper=pd.Timestamp.today().normalize())
+        bad_ann = calendar['ANNOUNCEMENT_DT'].isna() | (
+            calendar['ANNOUNCEMENT_DT'] < calendar['date']
+        )
+        calendar['date_adj'] = calendar['ANNOUNCEMENT_DT'].where(~bad_ann, fallback)
+        # Rows whose announcement was returned but rejected (unparsed, or
+        # before the period end): a high share means a parsing problem, not
+        # genuinely missing dates — surface it instead of silently lagging.
+        rejected = int((bad_ann & calendar['ANNOUNCEMENT_DT'].notna()).sum()) + (n_raw - n_parsed)
+        msg = (
+            f"Quarterly dates: {int((~bad_ann).sum())} from ANNOUNCEMENT_DT, "
+            f"{int(bad_ann.sum())} period end + {self._QUARTERLY_FALLBACK_LAG_DAYS}d fallback "
+            f"({rejected} returned announcement dates unparsed or before the period end)"
+        )
+        if n_raw and rejected > 0.2 * n_raw:
+            self.logger.warning(msg + " — check ANNOUNCEMENT_DT parsing")
+        else:
+            self.logger.info(msg)
         calendar['date_dif'] = calendar.groupby('code_bloomberg')['date_adj'].diff(1)
         calendar['date_adj'] = np.where(
-            calendar['date_dif'].dt.days < 0, calendar['date'], calendar['date_adj']
+            calendar['date_dif'].dt.days < 0, fallback, calendar['date_adj']
         )
 
         out = (

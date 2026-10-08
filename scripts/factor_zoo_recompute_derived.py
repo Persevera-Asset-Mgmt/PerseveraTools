@@ -1,0 +1,180 @@
+"""One-off full-history recompute of the derived factor_zoo fields (no Bloomberg).
+
+Runs every derived category from 2000 with the current transforms, in
+dependency order, and replaces each output field wholesale: a field produced
+by a category is deleted from factor_zoo and rewritten (one transaction per
+field), so rows the new code no longer produces (non-session liquidity
+dates, stale quarterly carries, dead codes) do not linger as an upsert would
+leave them.
+
+Before the first write, the derived fields currently in factor_zoo from
+``--backup-from`` on (default 2024-01-01) are copied to
+``factor_zoo_derived_bak_<YYYYMMDD>`` (CREATE TABLE AS SELECT) for a
+before/after comparison; earlier history is not backed up.
+
+Usage::
+
+    python scripts/factor_zoo_recompute_derived.py                 # dry run: counts only
+    python scripts/factor_zoo_recompute_derived.py --apply
+    python scripts/factor_zoo_recompute_derived.py --apply --category liquidity
+"""
+
+from __future__ import annotations
+
+import argparse
+import gc
+import io
+import sys
+import time
+from pathlib import Path
+
+import pandas as pd
+import sqlalchemy
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from persevera_tools.data.factor_zoo.fields import preload_factor_definitions  # noqa: E402
+from persevera_tools.data.factor_zoo.pipeline import (  # noqa: E402
+    DERIVED_DEPENDENT_ORDER,
+    DERIVED_INDEPENDENT_ORDER,
+    process_category,
+)
+from persevera_tools.db.connection import get_db_engine  # noqa: E402
+from persevera_tools.db.operations import read_sql  # noqa: E402
+
+SQL_MIN_DATE = "1999-12-31"  # load everything stored (factor_zoo starts in 2000)
+ORDER = list(DERIVED_INDEPENDENT_ORDER) + list(DERIVED_DEPENDENT_ORDER)
+COPY_CHUNK = 1_000_000
+
+
+def derived_fields_in_db() -> list[str]:
+    """Fields in Definições dos Fatores without a Bloomberg code (i.e. derived)."""
+    df = preload_factor_definitions()
+    return sorted(df.loc[df["Código Bloomberg"].isna(), "Name"].astype(str).unique())
+
+
+def existing_counts(fields: list[str]) -> pd.Series:
+    if not fields:
+        return pd.Series(dtype="int64")
+    r = read_sql("SELECT field, count(*) AS n FROM factor_zoo WHERE field = ANY(:f) GROUP BY field",
+                 params={"f": fields}, raise_errors=True)
+    return r.set_index("field")["n"]
+
+
+def backup(engine, fields: list[str], since: str) -> str:
+    name = f"factor_zoo_derived_bak_{pd.Timestamp.today():%Y%m%d}"
+    with engine.begin() as conn:
+        exists = conn.execute(sqlalchemy.text("SELECT to_regclass(:n) IS NOT NULL"), {"n": name}).scalar()
+        if exists:
+            print(f"Backup table {name} already exists; keeping it.", flush=True)
+            return name
+        conn.execute(sqlalchemy.text(
+            f"CREATE TABLE {name} AS SELECT * FROM factor_zoo WHERE field = ANY(:f) AND date >= :d"),
+            {"f": fields, "d": since})
+        n = conn.execute(sqlalchemy.text(f"SELECT count(*) FROM {name}")).scalar()
+    print(f"Backup: {n:,} rows copied to {name}", flush=True)
+    return name
+
+
+def replace_fields(engine, df: pd.DataFrame) -> tuple[int, int]:
+    """Replace each of df's fields wholesale — one transaction per field.
+
+    Per field rather than per category keeps the extra disk needed while the
+    deleted rows are still held by the open transaction small (the managed
+    Postgres goes read-only near a full disk).
+    """
+    deleted = inserted = 0
+    for fld, part in df.groupby("field", sort=True):
+        d, i = _replace_one_field(engine, fld, part[["code", "date", "field", "value"]])
+        deleted += d
+        inserted += i
+    return deleted, inserted
+
+
+def _replace_one_field(engine, fld: str, cols: pd.DataFrame) -> tuple[int, int]:
+    raw = engine.raw_connection()
+    try:
+        cur = raw.cursor()
+        cur.execute("CREATE TEMP TABLE _dv (code text, date date, field text, value double precision) ON COMMIT DROP")
+        # COPY in chunks: one CSV buffer for tens of millions of rows exhausts memory.
+        for i in range(0, len(cols), COPY_CHUNK):
+            buf = io.StringIO()
+            cols.iloc[i:i + COPY_CHUNK].to_csv(buf, index=False, header=False, date_format="%Y-%m-%d")
+            buf.seek(0)
+            cur.copy_expert("COPY _dv (code, date, field, value) FROM STDIN WITH (FORMAT csv)", buf)
+            del buf
+        cur.execute("DELETE FROM factor_zoo WHERE field = %s", (fld,))
+        deleted = cur.rowcount
+        cur.execute("INSERT INTO factor_zoo (code, date, field, value) SELECT code, date, field, value FROM _dv")
+        inserted = cur.rowcount
+        raw.commit()
+        return deleted, inserted
+    except BaseException:
+        raw.rollback()
+        raise
+    finally:
+        raw.close()
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--apply", action="store_true", help="Write (default: dry run).")
+    p.add_argument("--category", action="append", choices=ORDER, help="Only these categories.")
+    p.add_argument("--backup-from", default="2024-01-01", help="Back up derived rows from this date on.")
+    p.add_argument("--no-backup", action="store_true", help="Skip the backup table (e.g. disk near full).")
+    args = p.parse_args(argv)
+    cats = [c for c in ORDER if not args.category or c in args.category]
+    engine = get_db_engine()
+    try:
+        if args.apply and not args.no_backup:
+            backup(engine, derived_fields_in_db(), args.backup_from)
+        summary = []
+        for cat in cats:
+            t0 = time.time()
+            # upload=False: compute only; output_min_date=None keeps the full history.
+            # Long reads occasionally lose the SSL connection; computing has no
+            # side effects, so retry it.
+            for attempt in range(1, 4):
+                try:
+                    df = process_category(cat, sql_min_date=SQL_MIN_DATE, output_min_date=None, upload=False)
+                    break
+                except sqlalchemy.exc.OperationalError as exc:
+                    if attempt == 3:
+                        raise
+                    print(f"{cat}: connection error on read (attempt {attempt}), retrying in 60s: "
+                          f"{str(exc).splitlines()[0][:120]}", flush=True)
+                    time.sleep(60)
+            n_raw = len(df)
+            df = df.drop_duplicates(["code", "date", "field"], keep="last")
+            if len(df) < n_raw:
+                print(f"{cat}: dropped {n_raw - len(df):,} duplicate (code, date, field) rows", flush=True)
+            fields = sorted(df["field"].unique()) if len(df) else []
+            before = existing_counts(fields)
+            new = df.groupby("field").size() if len(df) else pd.Series(dtype="int64")
+            for f in fields:
+                summary.append({"category": cat, "field": f, "rows_now": int(before.get(f, 0)),
+                                "rows_new": int(new.get(f, 0)), "codes_new": int(df.loc[df.field == f, "code"].nunique())})
+            msg = f"[{pd.Timestamp.now():%H:%M:%S}] {cat}: {len(df):,} rows, {len(fields)} fields, computed in {time.time() - t0:.0f}s"
+            if args.apply and len(df):
+                print(msg + " | writing...", flush=True)
+                deleted, inserted = replace_fields(engine, df)
+                msg += f" | -{deleted:,} +{inserted:,} (written at {pd.Timestamp.now():%H:%M:%S})"
+            print(msg, flush=True)
+            del df
+            gc.collect()
+        s = pd.DataFrame(summary)
+        if len(s):
+            pd.set_option("display.width", 200); pd.set_option("display.max_rows", 300)
+            s["change"] = (s.rows_new / s.rows_now.replace(0, pd.NA) - 1).round(3)
+            print(s.to_string(index=False))
+            print(s.groupby("category")[["rows_now", "rows_new"]].sum().to_string())
+        if not args.apply:
+            print("Dry run: nothing written (use --apply).")
+    finally:
+        engine.dispose()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
