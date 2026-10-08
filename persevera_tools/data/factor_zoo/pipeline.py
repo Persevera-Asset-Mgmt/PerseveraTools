@@ -356,7 +356,10 @@ def run_all_derived_factors_sequentially(
 LOAD_LOOKBACK_DAYS: dict[str, int] = {
     "price_momentum": 500,       # 12m change (360d) + 1m skip + 21d carry
     "price_range": 450,          # 360-day window
-    "liquidity": 450,            # 252 sessions + 80% coverage
+    # Full history: a code counts as listed from its first print, and its
+    # no-trade sessions count as zero volume; any finite window can start
+    # after a rarely traded code's first print and drop its 252d median.
+    "liquidity": 10000,
     "ratios_growth": 800,        # 360-day change on a 360-day carry
     "value": 400,                # balance-sheet carry of 252 rows
     "accruals": 800,             # 360-day change + average assets
