@@ -351,6 +351,77 @@ def run_all_derived_factors_sequentially(
         clear_factor_definitions_cache()
 
 
+# Calendar days of input each category needs to compute its latest values:
+# its rolling windows / lags plus forward-fill limits and some slack.
+LOAD_LOOKBACK_DAYS: dict[str, int] = {
+    "price_momentum": 500,       # 12m change (360d) + 1m skip + 21d carry
+    "price_range": 450,          # 360-day window
+    "liquidity": 450,            # 252 sessions + 80% coverage
+    "ratios_growth": 800,        # 360-day change on a 360-day carry
+    "value": 400,                # balance-sheet carry of 252 rows
+    "accruals": 800,             # 360-day change + average assets
+    "operating_leverage": 1600,  # 8 quarters of YoY changes (12 releases)
+    "value_timeseries": 4400,    # 10-year percentile
+    "short_selling": 45,         # same-date inputs only
+    "quality_variability": 2600, # 20 quarters (+ growth inputs)
+}
+
+
+def run_incremental(
+    *,
+    output_days: int = 10,
+    full_codes: Iterable[str] = (),
+    upload: bool = True,
+) -> Dict[str, int]:
+    """Daily derived update: recent dates only, changed rows only.
+
+    Each category loads ``LOAD_LOOKBACK_DAYS`` of input and keeps output from
+    the last ``output_days``. Codes in ``full_codes`` (history replaced by the
+    download step that day) keep their whole history, which needs the full
+    input; that only happens on days with restated prices or new codes.
+    Rows are upserted only when new or changed, so an unchanged overlap costs
+    no writes. Categories run in dependency order (dependents read the
+    independents' fresh output from the database).
+    """
+    from .storage import upsert_changed
+
+    full_codes = set(full_codes)
+    today = pd.Timestamp.today().normalize()
+    since = today - pd.Timedelta(days=output_days)
+    written: Dict[str, int] = {}
+    clear_factor_definitions_cache()
+    preload_factor_definitions()
+    try:
+        for cat in DERIVED_INDEPENDENT_ORDER + DERIVED_DEPENDENT_ORDER:
+            t0 = time.time()
+            lookback = LOAD_LOOKBACK_DAYS[cat]
+            sql_min = "1999-12-31" if full_codes else (today - pd.Timedelta(days=lookback)).strftime("%Y-%m-%d")
+            df = process_category(cat, sql_min_date=sql_min, output_min_date=None, upload=False)
+            if df.empty:
+                written[cat] = 0
+                continue
+            keep = (pd.to_datetime(df["date"]) >= since) | df["code"].isin(full_codes)
+            out = df[keep]
+            written[cat] = upsert_changed(out) if upload else len(out)
+            logger.info("%s: %d rows kept of %d (%.0fs)", cat, len(out), len(df), time.time() - t0)
+            print(f"{cat}: {len(out):,} rows upserted (changed only) in {time.time() - t0:.0f}s", flush=True)
+    finally:
+        clear_factor_definitions_cache()
+    return written
+
+
+def _refetched_codes_today() -> list[str]:
+    """Codes whose raw history the download step replaced today (if it ran)."""
+    import json
+
+    from .company_data import REFETCHED_FILE
+
+    if not REFETCHED_FILE.exists():
+        return []
+    info = json.loads(REFETCHED_FILE.read_text())
+    return info.get("codes", []) if info.get("date") == pd.Timestamp.today().strftime("%Y-%m-%d") else []
+
+
 def _main(argv: Sequence[str] | None = None) -> None:
     import argparse
 
@@ -367,6 +438,12 @@ def _main(argv: Sequence[str] | None = None) -> None:
         choices=("independent", "dependent", "all"),
         help='Batch preset (ignored if --category is used). Defaults to "all".',
     )
+    p.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Daily mode: recent dates only, changed rows only (see run_incremental).",
+    )
+    p.add_argument("--days", type=int, default=10, help="Output window for --incremental.")
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--sql-from", dest="sql_min_date", default="2000-01-01")
     p.add_argument(
@@ -395,6 +472,13 @@ def _main(argv: Sequence[str] | None = None) -> None:
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO)
+
+    if args.incremental:
+        full = _refetched_codes_today()
+        if full:
+            print(f"Full-history recompute for {len(full)} codes refetched today", flush=True)
+        run_incremental(output_days=args.days, full_codes=full, upload=not args.no_upload)
+        return
 
     out_min: str | None = args.output_min_date or None
     base_kw = dict(

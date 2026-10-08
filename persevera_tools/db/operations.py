@@ -107,8 +107,14 @@ def to_sql(data: pd.DataFrame,
                table_name: str,
                primary_keys: list,
                update: bool,
-               batch_size: int = 5000):
-    """Upload data to SQL table with batch processing and conflict handling."""
+               batch_size: int = 5000,
+               only_changed: bool = False):
+    """Upload data to SQL table with batch processing and conflict handling.
+
+    ``only_changed`` (with ``update``) skips rewriting rows whose non-key
+    columns are unchanged — re-uploading an overlapping window then writes
+    only new or revised rows instead of churning the table.
+    """
     logger.info(f"Uploading {len(data)} rows to table '{table_name}'")
     
     if len(data) == 0:
@@ -137,7 +143,7 @@ def to_sql(data: pd.DataFrame,
         cols = ','.join(list(data.columns))
         
         # Create SQL query
-        query = f"INSERT INTO {table_name} ({cols}) VALUES %s"
+        query = f"INSERT INTO {table_name} AS t ({cols}) VALUES %s"
         
         if update:
             # Add ON CONFLICT clause for upsert
@@ -148,6 +154,9 @@ def to_sql(data: pd.DataFrame,
                 
             update_stmt = ', '.join([f"{col} = EXCLUDED.{col}" for col in update_cols])
             query += f" ON CONFLICT ({', '.join(primary_keys)}) DO UPDATE SET {update_stmt}"
+            if only_changed:
+                changed = ' OR '.join(f"t.{col} IS DISTINCT FROM EXCLUDED.{col}" for col in update_cols)
+                query += f" WHERE {changed}"
         else:
             # Add ON CONFLICT DO NOTHING clause
             query += f" ON CONFLICT ({', '.join(primary_keys)}) DO NOTHING"

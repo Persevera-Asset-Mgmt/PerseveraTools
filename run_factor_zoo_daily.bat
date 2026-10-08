@@ -19,20 +19,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Step 1: Bloomberg company data (raw inputs) -> factor_zoo
+:: Step 1: Bloomberg company data, incremental (recent window + restated histories)
 call :run_script -m persevera_tools.data.factor_zoo.company_data
 if errorlevel 1 goto :failed
 
-:: Step 1b: Ticker successions (seed + Fibery "Codigos Anteriores") -> merge old codes
+:: Step 2: Ticker successions (seed + Fibery "Codigos Anteriores") -> merge old codes
 call :run_script -m persevera_tools.data.factor_zoo.aliases --apply
 if errorlevel 1 goto :failed
 
-:: Step 2: Derived factors — independent phase
-call :run_script -m persevera_tools.data.factor_zoo --phase independent
-if errorlevel 1 goto :failed
-
-:: Step 3: Derived factors — dependent phase (requires step 2 uploaded)
-call :run_script -m persevera_tools.data.factor_zoo --phase dependent
+:: Step 3: Derived factors, incremental (recent dates, changed rows only; dependents after independents)
+call :run_script -m persevera_tools.data.factor_zoo --incremental
 if errorlevel 1 goto :failed
 
 echo.
