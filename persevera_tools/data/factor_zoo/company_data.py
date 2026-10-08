@@ -208,6 +208,14 @@ def run(categories: Sequence[str]) -> int:
             print(f"FAILED full history {cat}: {exc}", flush=True)
             failed[f"full:{cat}"] = str(exc)
 
+    if new_codes:
+        # A code Bloomberg does not recognise would be retried in every
+        # category every day; surface it so the ticker can be fixed in Fibery.
+        still_empty = codes_without_history(new_codes)
+        if still_empty:
+            print(f"WARNING: no Bloomberg price for new code(s) {sorted(still_empty)} — "
+                  "check the ticker in 'Ações Ativas'", flush=True)
+
     refetched = sorted(set().union(*full.values())) if full else []
     REFETCHED_FILE.parent.mkdir(parents=True, exist_ok=True)
     REFETCHED_FILE.write_text(json.dumps({"date": today.strftime("%Y-%m-%d"), "codes": refetched}, indent=1))
