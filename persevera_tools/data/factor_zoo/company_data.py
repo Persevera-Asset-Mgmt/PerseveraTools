@@ -45,7 +45,7 @@ HISTORY_FLOOR = "2000-01-01"
 DAILY_WINDOW_DAYS = 30  # covers ~3 weeks of missed runs (holidays, PC off)
 QUARTERLY_REQUEST_DAYS = 400
 QUARTERLY_REPLACE_DAYS = 200
-RESTATEMENT_TOLERANCE = 1e-6
+RESTATEMENT_TOLERANCE = 1e-4  # a dividend restates history by >=0.1%; below 0.01% is noise
 FETCH_ATTEMPTS = 3
 
 REFETCHED_FILE = Path(__file__).resolve().parents[3] / "examples" / "factor_zoo_refetched.json"
@@ -140,8 +140,17 @@ def restated_codes(new: pd.DataFrame, field: str, before: pd.Timestamp) -> set[s
     )
     m = new.assign(date=pd.to_datetime(new["date"])).merge(old, on=["code", "date"], suffixes=("_new", "_old"))
     m = m[m["value_old"].abs() > 0]
-    changed = (m["value_new"] / m["value_old"] - 1).abs() > RESTATEMENT_TOLERANCE
-    return set(m.loc[changed, "code"])
+    m["rel"] = (m["value_new"] / m["value_old"] - 1).abs()
+    per_code = m.groupby("code")["rel"].max()
+    flagged = per_code[per_code > RESTATEMENT_TOLERANCE]
+    if len(flagged):
+        # A dividend restates by ~0.1-3%; tiny changes point to rounding noise.
+        buckets = pd.cut(flagged, [0, 1e-4, 1e-3, 1e-2, 1e-1, float("inf")],
+                         labels=["<0.01%", "0.01-0.1%", "0.1-1%", "1-10%", ">10%"])
+        print(f"  {field}: {len(flagged)} restated codes by max change "
+              f"{buckets.value_counts().sort_index().to_dict()}; largest "
+              f"{flagged.sort_values(ascending=False).head(5).round(4).to_dict()}", flush=True)
+    return set(flagged.index)
 
 
 def codes_without_history(codes: Iterable[str]) -> set[str]:
