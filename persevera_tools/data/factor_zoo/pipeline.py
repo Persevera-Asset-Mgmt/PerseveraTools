@@ -372,7 +372,7 @@ LOAD_LOOKBACK_DAYS: dict[str, int] = {
 
 def run_incremental(
     *,
-    output_days: int = 10,
+    output_days: int = 30,
     full_codes: Iterable[str] = (),
     upload: bool = True,
 ) -> Dict[str, int]:
@@ -446,7 +446,7 @@ def _main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help="Daily mode: recent dates only, changed rows only (see run_incremental).",
     )
-    p.add_argument("--days", type=int, default=10, help="Output window for --incremental.")
+    p.add_argument("--days", type=int, default=30, help="Output window for --incremental (match the download window).")
     p.add_argument("--no-upload", action="store_true")
     p.add_argument("--sql-from", dest="sql_min_date", default="2000-01-01")
     p.add_argument(
