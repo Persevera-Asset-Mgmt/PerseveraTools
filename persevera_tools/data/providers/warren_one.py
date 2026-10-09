@@ -119,6 +119,9 @@ _MONTH_FIELDS = (
     "july", "august", "september", "october", "november", "december",
 )
 
+# Carteiras auxiliares (só fluxos: /RENDIMENTOS, /AMORTIZACOES-..., /SWAPs, /TD, /AUXILIAR...).
+_AUXILIARY_MARKER = "/"
+
 _PORTFOLIO_COLUMNS = {
     "id": "portfolio_id",
     "name": "name",
@@ -151,7 +154,8 @@ class WarrenOneProvider(DataProvider):
       - class_allocations           : [active_only=True]
       - indexes                     : (none)
       - returns                     : portfolio_id, date, [benchmarks], [compare_to]
-      - all_returns                 : date, [benchmarks], [compare_to], [portfolio_type], [on_error]
+      - all_returns                 : date, [benchmarks], [compare_to], [portfolio_type],
+                                      [exclude_auxiliary=True], [use_last_position=False], [on_error]
       - monthly_returns             : portfolio_id, date, [benchmarks]
       - accumulated_returns         : portfolio_id, date, [period | start], [benchmarks]
       - performance_attribution     : portfolio_id, date
@@ -275,6 +279,8 @@ class WarrenOneProvider(DataProvider):
                 compare_to=kwargs.get("compare_to"),
                 portfolio_type=kwargs.get("portfolio_type"),
                 active_only=kwargs.get("active_only", True),
+                exclude_auxiliary=kwargs.get("exclude_auxiliary", True),
+                use_last_position=kwargs.get("use_last_position", False),
                 on_error=kwargs.get("on_error", "raise"),
             )
 
@@ -326,7 +332,10 @@ class WarrenOneProvider(DataProvider):
 
         Colunas: portfolio_id, name, portfolio_type, currency, is_active, initial_date,
         last_position_date, last_valid_processed_date, total_net_value, inflow_value,
-        outflow_value, return_month, return_ytd, return_inception.
+        outflow_value, return_month, return_ytd, return_inception, is_auxiliary.
+
+        ``is_auxiliary`` marca carteiras auxiliares (nome com '/', ex.: 'XXXX-BPCV-0000/RENDIMENTOS'),
+        que recebem só fluxos e têm rentabilidade sem significado econômico (+39.000% visto em produção).
 
         Atenção: ``last_valid_processed_date`` não indica até quando há rentabilidade
         calculada (carteiras com 2025-12-31 ali tinham retornos até 2026-06-30); use
@@ -345,6 +354,7 @@ class WarrenOneProvider(DataProvider):
         df = pd.DataFrame(rows, columns=[*_PORTFOLIO_COLUMNS.values(), "return_month", "return_ytd", "return_inception"])
         for col in ("initial_date", "last_position_date", "last_valid_processed_date"):
             df[col] = pd.to_datetime(df[col], errors="coerce")
+        df["is_auxiliary"] = df["name"].fillna("").str.contains(_AUXILIARY_MARKER, regex=False)
         self._initial_dates.update(
             {pid: ini for pid, ini in zip(df["portfolio_id"], df["initial_date"]) if pd.notna(ini)}
         )
@@ -453,6 +463,8 @@ class WarrenOneProvider(DataProvider):
         compare_to: Optional[BenchmarkSpec] = None,
         portfolio_type: Optional[str] = None,
         active_only: bool = True,
+        exclude_auxiliary: bool = True,
+        use_last_position: bool = False,
         on_error: str = "raise",
     ) -> pd.DataFrame:
         """
@@ -460,27 +472,45 @@ class WarrenOneProvider(DataProvider):
 
         Args:
             portfolio_type: filtra por tipo (ex.: 'Consolidado', 'Carteira').
+            exclude_auxiliary: ignora carteiras auxiliares (nome com '/'; ver ``get_portfolios``).
+            use_last_position: para carteiras cuja última posição é anterior a ``date``, consulta
+                a rentabilidade na última posição (a API responde 204 para datas sem posição).
+                A coluna ``date`` traz a data efetivamente usada e ``is_stale`` marca essas carteiras.
             on_error: 'raise' (default) interrompe na primeira falha; 'skip' registra e segue.
 
-        Carteiras sem rentabilidade na data (204) ficam fora do resultado e são listadas em warning.
-        Colunas: as de ``get_returns`` + portfolio_name.
+        Carteiras sem rentabilidade (204, ou nunca posicionadas com ``use_last_position``) ficam
+        fora do resultado e são listadas em warning.
+        Colunas: portfolio_id, portfolio_name, requested_date, is_stale + as de ``get_returns``.
         """
         if on_error not in ("raise", "skip"):
             raise ValueError("on_error must be 'raise' or 'skip'.")
 
+        requested = self._to_timestamp(date)
         portfolios = self.get_portfolios(active_only=active_only)
         if portfolio_type is not None:
             portfolios = portfolios[portfolios["portfolio_type"] == portfolio_type]
+        if exclude_auxiliary:
+            portfolios = portfolios[~portfolios["is_auxiliary"]]
 
         frames: List[pd.DataFrame] = []
         failed: List[str] = []
         empty: List[str] = []
+        stale: List[str] = []
         for i, row in enumerate(portfolios.itertuples(index=False)):
+            ref = requested
+            last_position = row.last_position_date
+            if use_last_position and pd.notna(last_position) and last_position < requested:
+                # Sem posição posterior ao início (ex.: 2000-01-03 = nunca posicionada): nada a consultar.
+                if pd.notna(row.initial_date) and last_position <= row.initial_date:
+                    empty.append(row.name)
+                    continue
+                ref = last_position
+
             if i and self.request_delay:
                 time.sleep(self.request_delay)
             try:
                 df = self.get_returns(
-                    row.portfolio_id, date,
+                    row.portfolio_id, ref,
                     benchmarks=benchmarks, compare_to=compare_to, initial_date=row.initial_date,
                 )
             except DataRetrievalError:
@@ -492,18 +522,27 @@ class WarrenOneProvider(DataProvider):
             if df.empty:
                 empty.append(row.name)
                 continue
+            if ref < requested:
+                stale.append(f"{row.name} ({self._fmt(ref)})")
             df.insert(1, "portfolio_name", row.name)
+            df.insert(2, "requested_date", requested)
+            df.insert(3, "is_stale", ref < requested)
             frames.append(df)
 
         if failed:
             logger.warning("Warren One: %d carteira(s) com erro: %s", len(failed), ", ".join(failed))
+        if stale:
+            logger.warning("Warren One: %d carteira(s) com rentabilidade na última posição, anterior a %s: %s",
+                           len(stale), self._fmt(requested), ", ".join(stale))
         if empty:
-            # Visto em homologação: carteiras nunca posicionadas e também carteiras com PL e
-            # posição na data, mas sem rentabilidade calculada (a API responde 204).
-            logger.warning("Warren One: %d carteira(s) sem rentabilidade em %s (204): %s",
-                           len(empty), self._fmt(self._to_timestamp(date)), ", ".join(empty))
+            # Em produção (2026-10), todos os 204 eram carteiras sem posição na data pedida.
+            logger.warning("Warren One: %d carteira(s) sem rentabilidade em %s: %s",
+                           len(empty), self._fmt(requested), ", ".join(empty))
         if not frames:
-            return pd.DataFrame(columns=["portfolio_id", "portfolio_name", "date", "series", "series_type", "window", "value"])
+            return pd.DataFrame(columns=[
+                "portfolio_id", "portfolio_name", "requested_date", "is_stale",
+                "date", "series", "series_type", "window", "value",
+            ])
         return pd.concat(frames, ignore_index=True)
 
     def get_monthly_returns(
