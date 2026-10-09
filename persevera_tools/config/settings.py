@@ -109,6 +109,19 @@ class Settings:
         self.ANBIMA_FEED_SANDBOX = os.getenv('PERSEVERA_ANBIMA_FEED_SANDBOX', 'true')
         self.ANBIMA_FEED_BASE_URL = os.getenv('PERSEVERA_ANBIMA_FEED_BASE_URL')
 
+        # Warren One (consolidação de carteiras / WarrenOneProvider)
+        self.WARRENONE_CLIENT_ID = os.getenv('PERSEVERA_WARRENONE_CLIENT_ID')
+        self.WARRENONE_SECRET_KEY = os.getenv('PERSEVERA_WARRENONE_SECRET_KEY')
+        self.WARRENONE_TENANT_ID = os.getenv('PERSEVERA_WARRENONE_TENANT_ID')
+        self.WARRENONE_ENV = os.getenv('PERSEVERA_WARRENONE_ENV', 'prd')
+        self.WARRENONE_AUTH_BASE_URL = os.getenv('PERSEVERA_WARRENONE_AUTH_BASE_URL')
+        self.WARRENONE_API_BASE_URL = os.getenv('PERSEVERA_WARRENONE_API_BASE_URL')
+        self.WARRENONE_TIMEOUT = os.getenv('PERSEVERA_WARRENONE_TIMEOUT')
+        self.WARRENONE_VERIFY_SSL = os.getenv('PERSEVERA_WARRENONE_VERIFY_SSL', 'true')
+        self.WARRENONE_REQUEST_DELAY = os.getenv('PERSEVERA_WARRENONE_REQUEST_DELAY')
+        self.WARRENONE_MAX_RETRIES = os.getenv('PERSEVERA_WARRENONE_MAX_RETRIES')
+        self.WARRENONE_RETRY_BACKOFF = os.getenv('PERSEVERA_WARRENONE_RETRY_BACKOFF')
+
     def get_gs_client_secret(self):
         return {
             "installed":{
