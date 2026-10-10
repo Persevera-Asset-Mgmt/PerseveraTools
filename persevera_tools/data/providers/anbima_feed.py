@@ -720,11 +720,13 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
           kwargs: mes_referencia, ano_referencia
       - get_notas_explicativas(codigo_ou_cnpj, **kwargs): notas explicativas de uma classe/subclasse
           kwargs: page, size
+      - get_classificacao_historica(codigos_ou_cnpjs) : tipo ANBIMA vigente em cada data, por CNPJ
 
     Resolução de CNPJ:
-      - cnpj_to_codigo_fundo(cnpj) → código F (fundo)
-      - Para métodos que precisam de código de classe (C/S), a primeira classe ativa
-        é resolvida automaticamente via get_fundo_detalhes.
+      - cnpj_to_codigo_fundo(cnpj) → código F (fundo); aceita CNPJ de fundo ou de classe
+      - Para métodos que precisam de código de classe (C/S), um CNPJ de classe resolve
+        para a própria classe; um CNPJ de fundo, para a primeira classe (via
+        get_fundo_detalhes).
     """
 
     def __init__(self, start_date: str = "1980-01-01", sandbox: Optional[bool] = None):
@@ -735,6 +737,9 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
         self._fundo_cnpj_cache: Dict[str, str] = {}
         # codigo_fundo (F) → primeiro codigo_classe (C)
         self._fundo_classe_cache: Dict[str, str] = {}
+        # CNPJ da classe (14 dígitos) → codigo_classe (C). Após a RCVM 175 a
+        # classe tem CNPJ próprio, que pode diferir do CNPJ do fundo.
+        self._cnpj_classe_cache: Dict[str, str] = {}
 
     # ------------------------------------------------------------------ #
     # CNPJ helpers                                                         #
@@ -751,9 +756,41 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
         digits = re.sub(r"[.\-/\s]", "", value).strip()
         return digits.isdigit() and len(digits) == 14
 
+    def _cache_list_rows(self, rows: List[Dict]) -> int:
+        """
+        Indexa linhas de ``anbima_fundos_lista``: CNPJ do fundo e de cada classe
+        → código do fundo, e CNPJ da classe → código da classe.
+
+        Returns:
+            Número de CNPJs novos no cache de fundos.
+        """
+        added = 0
+        for item in rows:
+            cnpj_value = str(item.get("identificador_fundo") or "")
+            fund_code = str(item.get("codigo_fundo") or "")
+            if not fund_code:
+                continue
+            keys = []
+            if cnpj_value:
+                keys.append(self._normalize_cnpj(cnpj_value))
+                self._fundo_cnpj_cache.setdefault(fund_code, cnpj_value)
+            for cls in item.get("classes") or []:
+                cnpj_classe = str(cls.get("identificador_classe") or "")
+                codigo_classe = cls.get("codigo_classe")
+                if cnpj_classe and codigo_classe:
+                    key = self._normalize_cnpj(cnpj_classe)
+                    self._cnpj_classe_cache[key] = codigo_classe
+                    keys.append(key)
+            for key in keys:
+                if key not in self._cnpj_fundo_cache:
+                    self._cnpj_fundo_cache[key] = fund_code
+                    added += 1
+        return added
+
     def cnpj_to_codigo_fundo(self, cnpj: str, tipo_fundo: Optional[str] = None) -> str:
         """
-        Resolve um CNPJ para o código ANBIMA do fundo (prefixo F).
+        Resolve um CNPJ (do fundo ou de uma de suas classes) para o código
+        ANBIMA do fundo (prefixo F).
 
         Faz paginação automática em ``anbima_fundos_lista`` até encontrar o CNPJ.
         Os resultados são cacheados na instância (válido enquanto o objeto existir).
@@ -798,12 +835,7 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
             elif isinstance(raw, list):
                 rows = raw
 
-            for item in rows:
-                cnpj_value = str(item.get("identificador_fundo", ""))
-                fund_code = str(item.get("codigo_fundo", ""))
-                if cnpj_value and fund_code:
-                    self._cnpj_fundo_cache[self._normalize_cnpj(cnpj_value)] = fund_code
-                    self._fundo_cnpj_cache[fund_code] = cnpj_value
+            self._cache_list_rows(rows)
 
             if normalized in self._cnpj_fundo_cache:
                 return self._cnpj_fundo_cache[normalized]
@@ -857,10 +889,14 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
 
         - C/S → retorna como está.
         - F (código de fundo) → retorna o código da primeira classe.
-        - CNPJ → resolve para F, depois para a primeira classe.
+        - CNPJ de classe → código dessa classe.
+        - CNPJ de fundo → resolve para F, depois para a primeira classe.
         """
         if self._is_cnpj(value):
             codigo_fundo = self.cnpj_to_codigo_fundo(value, tipo_fundo=tipo_fundo)
+            codigo_classe = self._cnpj_classe_cache.get(self._normalize_cnpj(value))
+            if codigo_classe:
+                return codigo_classe
             return self._get_first_classe_codigo(codigo_fundo)
         if value.upper().startswith("F"):
             return self._get_first_classe_codigo(value)
@@ -933,6 +969,76 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
         """
         codigo = self._resolve_fundo_codigo(codigo_ou_cnpj, tipo_fundo=tipo_fundo)
         return self._get(f"{FUNDOS_BASE_PATH}/{codigo}/historico")
+
+    def get_classificacao_historica(self, codigos_ou_cnpjs: List[str]) -> pd.DataFrame:
+        """
+        Histórico da classificação ANBIMA (``tipo_anbima``) de cada fundo.
+
+        Lê ``historico_composicao_classe`` da classe correspondente: a própria
+        classe para CNPJ de classe, a primeira classe para CNPJ ou código (F)
+        de fundo. Faz no máximo uma varredura da listagem e uma chamada de
+        histórico por fundo.
+
+        Args:
+            codigos_ou_cnpjs: CNPJs (fundo ou classe, com ou sem formatação)
+                e/ou códigos de fundo (F…).
+
+        Returns:
+            DataFrame ``[identificador, data_vigencia, tipo_anbima]`` com o
+            identificador como recebido. Os não encontrados na ANBIMA ficam de
+            fora, com aviso no log.
+        """
+        ids = list(dict.fromkeys(codigos_ou_cnpjs))
+        if any(
+            self._is_cnpj(v) and self._normalize_cnpj(v) not in self._cnpj_fundo_cache
+            for v in ids
+        ):
+            self.pre_load_cnpj_cache()
+
+        historicos: Dict[str, Dict[str, Any]] = {}
+        rows: List[Dict[str, Any]] = []
+        missing: List[str] = []
+        for k, ident in enumerate(ids, 1):
+            codigo_classe: Optional[str] = None
+            if self._is_cnpj(ident):
+                key = self._normalize_cnpj(ident)
+                codigo_fundo = self._cnpj_fundo_cache.get(key)
+                codigo_classe = self._cnpj_classe_cache.get(key)
+            else:
+                codigo_fundo = ident
+            if not codigo_fundo:
+                missing.append(ident)
+                continue
+
+            if codigo_fundo not in historicos:
+                try:
+                    historicos[codigo_fundo] = self._get(
+                        f"{FUNDOS_BASE_PATH}/{codigo_fundo}/historico"
+                    )
+                except AnbimaFeedNotFoundError:
+                    historicos[codigo_fundo] = {}
+            classes = historicos[codigo_fundo].get("classes") or []
+            match = [c for c in classes if codigo_classe and c.get("codigo_classe") == codigo_classe]
+            for cls in match or classes[:1]:
+                for h in cls.get("historico_composicao_classe") or []:
+                    if h.get("tipo_anbima"):
+                        rows.append({
+                            "identificador": ident,
+                            "data_vigencia": h.get("data_vigencia"),
+                            "tipo_anbima": h["tipo_anbima"],
+                        })
+            if k % 100 == 0 or k == len(ids):
+                logger.info("get_classificacao_historica: [%d/%d] fundos", k, len(ids))
+
+        if missing:
+            logger.warning(
+                "get_classificacao_historica: %d/%d identificadores não encontrados na ANBIMA: %s",
+                len(missing), len(ids), missing[:10],
+            )
+
+        df = pd.DataFrame(rows, columns=["identificador", "data_vigencia", "tipo_anbima"])
+        df["data_vigencia"] = pd.to_datetime(df["data_vigencia"], errors="coerce")
+        return df.dropna(subset=["data_vigencia"]).drop_duplicates().reset_index(drop=True)
 
     _SERIE_HISTORICA_PAGE_SIZE = 1000  # limite hard da API por requisição
 
@@ -1067,8 +1173,8 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
 
     def pre_load_cnpj_cache(self, tipo_fundo: Optional[str] = None) -> int:
         """
-        Pré-carrega o cache de CNPJ varrendo **todas** as páginas de
-        ``anbima_fundos_lista`` em uma única passagem.
+        Pré-carrega o cache de CNPJ (de fundos e de classes) varrendo **todas**
+        as páginas de ``anbima_fundos_lista`` em uma única passagem.
 
         Útil antes de chamar :meth:`get_series_historicas` com muitos CNPJs:
         elimina o custo de varredura incremental por fundo e torna a resolução
@@ -1080,7 +1186,7 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
                 todos os fundos de interesse são do mesmo tipo.
 
         Returns:
-            Número de entradas adicionadas ao cache nesta chamada.
+            Número de CNPJs adicionados ao cache nesta chamada.
         """
         page = 0
         size = 1000
@@ -1111,15 +1217,7 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
             elif isinstance(raw, list):
                 rows = raw
 
-            for item in rows:
-                cnpj_value = str(item.get("identificador_fundo", ""))
-                fund_code = str(item.get("codigo_fundo", ""))
-                if cnpj_value and fund_code:
-                    key = self._normalize_cnpj(cnpj_value)
-                    if key not in self._cnpj_fundo_cache:
-                        self._cnpj_fundo_cache[key] = fund_code
-                        self._fundo_cnpj_cache[fund_code] = cnpj_value
-                        added += 1
+            added += self._cache_list_rows(rows)
 
             logger.debug(
                 "pre_load_cnpj_cache: página %d concluída — %d fundos lidos nesta página.",
