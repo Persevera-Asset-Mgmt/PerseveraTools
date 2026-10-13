@@ -480,6 +480,21 @@ class AnbimaFeedProvider(DataProvider):
                         msg = e.response.text[:500]
                         logger.error("ANBIMA Feed API error %s: %s", status, msg)
                 raise DataRetrievalError(f"ANBIMA Feed API request failed: {e}") from e
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                # Falha passageira da API (sem resposta em 60s, conexão caiu):
+                # mesma política dos 502/503/504.
+                if attempt < self._MAX_RETRIES - 1:
+                    wait = self._RETRY_BACKOFF * (2 ** attempt)
+                    logger.warning(
+                        "ANBIMA Feed %s em %s (tentativa %d/%d); "
+                        "aguardando %.0fs antes de tentar novamente.",
+                        type(e).__name__, url, attempt + 1, self._MAX_RETRIES, wait,
+                    )
+                    time.sleep(wait)
+                    last_exc = e
+                    continue
+                logger.error("ANBIMA Feed request failed: %s", e)
+                raise DataRetrievalError(f"ANBIMA Feed request failed: {e}") from e
             except requests.exceptions.RequestException as e:
                 logger.error("ANBIMA Feed request failed: %s", e)
                 raise DataRetrievalError(f"ANBIMA Feed request failed: {e}") from e
