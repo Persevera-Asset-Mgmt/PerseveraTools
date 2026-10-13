@@ -156,14 +156,19 @@ def _add_effective_end(df_comp: pd.DataFrame) -> pd.DataFrame:
     A API publica vigências que se sobrepõem (rebalanceamentos intra-trimestre
     em 2018) e vigências com ``data_fim`` antes do próximo início (2017/2018);
     encadear pelos inícios elimina dupla contagem e buracos.
+
+    O mapeamento usa só tipos do pandas: um ``dict`` com chaves
+    ``numpy.datetime64`` não encontra ``pd.Timestamp`` no numpy 1.x, e todas as
+    carteiras passavam a valer até o fim (série errada gravada pelo PC
+    Bloomberg em 2026-10).
     """
-    starts = np.sort(df_comp["data_inicio"].unique())
-    nxt = dict(zip(starts[:-1], starts[1:]))
+    starts = pd.DatetimeIndex(df_comp["data_inicio"].unique()).sort_values()
     last_end = df_comp.loc[df_comp["data_inicio"] == starts[-1], "data_fim"].max()
+    vig_fim = pd.Series(list(starts[1:] - pd.Timedelta(days=1)) + [last_end], index=starts)
     df = df_comp.copy()
-    df["vig_fim"] = df["data_inicio"].map(
-        lambda s: nxt[s] - pd.Timedelta(days=1) if s in nxt else last_end
-    )
+    df["vig_fim"] = df["data_inicio"].map(vig_fim)
+    if df["vig_fim"].isna().any():
+        raise RuntimeError("Falha ao encadear as vigencias das carteiras IHFA (vig_fim vazio).")
     return df
 
 
@@ -392,11 +397,15 @@ def build_index(
     if not rets:
         raise RuntimeError("Nenhum dia com cota dentro das vigências do sub-índice.")
     ret = pd.concat(rets).sort_index()
-    ret = ret[~ret.index.duplicated(keep="first")]
+    repetidas = ret.index[ret.index.duplicated()].unique()
+    if len(repetidas):
+        raise RuntimeError(
+            f"{len(repetidas)} data(s) cobertas por mais de uma carteira (vigencias sobrepostas): "
+            f"{[d.date() for d in repetidas[:5]]}"
+        )
     cobertura = pd.DataFrame(cov_rows)
 
     fresh_cov = pd.concat(fresh).sort_index()
-    fresh_cov = fresh_cov[~fresh_cov.index.duplicated(keep="first")]
     ok = fresh_cov[fresh_cov >= MIN_FRESH_COVERAGE].index
     if len(ok) and ok.max() < ret.index.max():
         cortados = ret.index[ret.index > ok.max()]
