@@ -7,6 +7,13 @@ import numpy as np
 from persevera_tools.fixed_income.data import get_emissions, get_series, get_references
 from persevera_tools.utils.dates import get_holidays
 from persevera_tools.data.indicators import get_series as get_indicator_series
+from persevera_tools.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Datas consecutivas em que a referência NTN-B de uma debênture pode ser
+# repetida quando a ANBIMA não a publica (ex.: 2021-07-09 veio sem o campo).
+REFERENCE_FFILL_LIMIT = 5
 
 
 def _macaulay_duration(
@@ -182,22 +189,32 @@ def calculate_spread(
 
         # References: pivot to wide (date × code → reference maturity) so that the
         # NTN-B lookup can be done with a single vectorised reindex instead of two
-        # long-format merges. The table only records changes and starts in
-        # 2018-01; earlier dates take each code's first known reference.
-        references = get_references(code=codes, start_date=start_date, end_date=end_date)
-        references = references.sort_values(['code', 'date'])
-        # Fill within each code only: a code without any reference must not
-        # inherit the next code's benchmark.
-        references['reference'] = references.groupby('code')['reference'].transform(
-            lambda s: s.ffill().bfill()
-        )
+        # long-format merges. ANBIMA publishes one per (code, date) since 2017-06;
+        # a missing day reuses the code's previous reference for up to
+        # REFERENCE_FFILL_LIMIT dates. No back-fill: it would use a benchmark
+        # chosen later. Debentures without a reference are left out (logged).
+        ref_start = (pd.Timestamp(start_date) - pd.Timedelta(days=15)) if start_date is not None else None
+        references = get_references(code=codes, start_date=ref_start, end_date=end_date)
         ref_wide = (
             references.dropna(subset=['reference'])
-            .drop_duplicates(subset=['date', 'code'])
+            .sort_values(['code', 'date'])
+            .drop_duplicates(subset=['date', 'code'], keep='last')
             .pivot(index='date', columns='code', values='reference')
-            .reindex(index=series_wide.index)
-            .ffill().bfill()
         )
+        ref_wide = (
+            ref_wide.reindex(index=ref_wide.index.union(series_wide.index))
+            .ffill(limit=REFERENCE_FFILL_LIMIT)
+            .reindex(index=series_wide.index)
+        )
+        sem_ref = series_wide.notna() & ref_wide.reindex(columns=series_wide.columns).isna()
+        if sem_ref.any().any():
+            logger.warning(
+                "Spread IPCA: %d pares (debenture, dia) com taxa e sem referencia NTN-B ficaram "
+                "de fora (%.1f%% das observacoes, %d debentures)",
+                int(sem_ref.sum().sum()),
+                100 * sem_ref.sum().sum() / series_wide.notna().sum().sum(),
+                int(sem_ref.any().sum()),
+            )
 
         # NTN-B yields: pivot to (date × maturity) lookup table.
         series_titulos_publicos = get_series(code='NTN-B', category='titulos_publicos', start_date=start_date, end_date=end_date, field=field)
@@ -227,6 +244,13 @@ def calculate_spread(
             pd.Series(ntnb_stacked.reindex(lookup_idx).to_numpy(), index=ref_long.index)
             .unstack('code')
         )
+
+        sem_ntnb = ytm_ntnb_wide.reindex_like(series_wide).isna() & ref_wide.reindex(columns=series_wide.columns).notna() & series_wide.notna()
+        if sem_ntnb.any().any():
+            logger.warning(
+                "Spread IPCA: %d pares (debenture, dia) com referencia sem taxa da NTN-B correspondente ficaram de fora",
+                int(sem_ntnb.sum().sum()),
+            )
 
         # Spread: single wide-format subtraction, then interpolate gaps.
         series = (series_wide - ytm_ntnb_wide).interpolate(limit=5, limit_area='inside')
