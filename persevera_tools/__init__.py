@@ -7,4 +7,4 @@ from . import data
 from . import quant_research
 from . import fixed_income
 
-__version__ = "0.20.1"
+__version__ = "0.20.2"
