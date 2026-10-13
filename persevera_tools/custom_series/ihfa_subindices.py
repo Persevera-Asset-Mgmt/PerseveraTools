@@ -12,7 +12,7 @@ Sub-índices disponíveis em ``SUBINDICES``; cada um grava um código
 
 Uso::
 
-    python -m persevera_tools.custom_series.ihfa_subindices --subindice long_short [--no-upload]
+    python -m persevera_tools.custom_series --subindice long_short [--no-upload]
 """
 
 from __future__ import annotations
@@ -574,4 +574,10 @@ def _main(argv: Sequence[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    _main()
+    # ``python -m persevera_tools.custom_series.ihfa_subindices`` executa este
+    # arquivo de novo como ``__main__``; o logger "__main__" fica fora da
+    # hierarquia ``persevera_tools`` e o log INFO some. Delega ao módulo já
+    # importado pelo pacote (prefira ``python -m persevera_tools.custom_series``).
+    from persevera_tools.custom_series import ihfa_subindices as _pkg
+
+    _pkg._main()

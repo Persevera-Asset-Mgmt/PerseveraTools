@@ -27,8 +27,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo Running: python -m persevera_tools.custom_series.ihfa_subindices
-python -m persevera_tools.custom_series.ihfa_subindices
+echo Running: python -m persevera_tools.custom_series
+python -m persevera_tools.custom_series
 if errorlevel 1 (
     echo Error occurred while running the IHFA sub-indices.
     %PAUSE_CMD%
