@@ -68,6 +68,10 @@ V2_START = (2024, 10)
 
 # Cobertura mínima (fração do peso do sub-índice com cota) aceita em cada vigência.
 MIN_COVERAGE = 0.80
+# Peso máximo do IHFA (em %) sem classificação ANBIMA aceito em uma carteira.
+# Fundo sem classificação fica fora de todos os sub-índices; uma falha
+# passageira da API mudaria a carteira sem alarme.
+MAX_UNCLASSIFIED_WEIGHT = 1.0
 # Os últimos dias só entram no índice se ao menos esta fração do peso tiver
 # cota publicada no dia (e não repetida da anterior); a CVM publica com atraso
 # e um dia com poucas cotas sairia com retorno ~0, revisado na rodada seguinte.
@@ -242,6 +246,7 @@ def classify_and_filter(
     padrao_tipo_anbima: str,
     fundos: Optional[AnbimaFundosProvider] = None,
     df_cls: Optional[pd.DataFrame] = None,
+    max_unclassified: float = MAX_UNCLASSIFIED_WEIGHT,
 ) -> pd.DataFrame:
     """
     Classifica cada fundo pela classificação ANBIMA vigente no início de cada
@@ -255,6 +260,8 @@ def classify_and_filter(
         df_cls: Histórico de classificação já obtido (saída de
             :meth:`AnbimaFundosProvider.get_classificacao_historica`); se
             ``None``, é buscado na ANBIMA.
+        max_unclassified: Peso máximo do IHFA (%) sem classificação em uma
+            carteira; acima disso o pipeline falha.
     """
     if df_cls is None:
         fundos = fundos or AnbimaFundosProvider()
@@ -274,12 +281,20 @@ def classify_and_filter(
     peso_sem = df[sem].groupby("data_inicio")["peso"].sum()
     if sem.any():
         logger.warning(
-            "Sem classificacao: %d fundos | peso no IHFA por carteira: medio %.1f%%, max %.1f%% (%s)",
+            "Sem classificacao: %d fundos %s | peso no IHFA por carteira: medio %.1f%%, max %.1f%% (%s)",
             df.loc[sem, "identificador"].nunique(),
+            sorted(df.loc[sem, "identificador"].unique()),
             peso_sem.reindex(df["data_inicio"].unique(), fill_value=0).mean(),
             peso_sem.max(),
             peso_sem.idxmax().date(),
         )
+        acima = peso_sem[peso_sem > max_unclassified]
+        if not acima.empty:
+            raise RuntimeError(
+                f"Peso do IHFA sem classificacao ANBIMA acima de {max_unclassified}% em "
+                f"{len(acima)} carteira(s): "
+                + ", ".join(f"{d.date()}={p:.2f}%" for d, p in acima.items())
+            )
 
     mask = df["tipo_anbima"].fillna("").str.lower().str.contains(padrao_tipo_anbima.lower())
     df_sub = df[mask].copy()
@@ -301,6 +316,12 @@ def classify_and_filter(
         df_sub["vig_fim"].max().date(),
         df_sub.groupby("data_inicio")["peso"].sum().mean(),
     )
+    for inicio, grp in df_sub.sort_values("peso_sub", ascending=False).groupby("data_inicio"):
+        logger.info(
+            "Carteira %s: %d fundos | %s",
+            inicio.date(), len(grp),
+            " ".join(f"{c}={p:.2f}" for c, p in zip(grp["identificador"], grp["peso_sub"])),
+        )
     return df_sub
 
 
@@ -447,6 +468,7 @@ def run_ihfa_subindex(
     batch_size: int = 5000,
     field: str = INDEX_FIELD,
     min_coverage: float = MIN_COVERAGE,
+    max_unclassified: float = MAX_UNCLASSIFIED_WEIGHT,
 ) -> pd.DataFrame:
     """
     Executa o pipeline completo de um sub-índice do IHFA.
@@ -460,6 +482,8 @@ def run_ihfa_subindex(
         field: Campo persistido (padrão ``close``).
         min_coverage: Cobertura mínima de cotas por carteira (ver
             :func:`build_index`).
+        max_unclassified: Peso máximo do IHFA (%) sem classificação por
+            carteira (ver :func:`classify_and_filter`).
 
     Returns:
         DataFrame long ``[date, code, field, value]`` pronto para ``indicadores``.
@@ -468,7 +492,9 @@ def run_ihfa_subindex(
     logger.info("=== Pipeline IHFA %s (%s) ===", subindice, cfg.code)
 
     df_comp = fetch_composition(AnbimaFeedProvider())
-    df_sub = classify_and_filter(df_comp, cfg.padrao_tipo_anbima, AnbimaFundosProvider())
+    df_sub = classify_and_filter(
+        df_comp, cfg.padrao_tipo_anbima, AnbimaFundosProvider(), max_unclassified=max_unclassified
+    )
     indice, ret, _ = build_index(df_sub, min_coverage=min_coverage, code=cfg.code)
 
     result = index_to_long(indice, code=cfg.code, field=field)
@@ -530,10 +556,21 @@ def _main(argv: Sequence[str] | None = None) -> None:
         default=MIN_COVERAGE,
         help="Fração mínima do peso com cota em cada carteira (padrão: %(default)s).",
     )
+    p.add_argument(
+        "--max-unclassified",
+        type=float,
+        default=MAX_UNCLASSIFIED_WEIGHT,
+        help="Peso máximo do IHFA (%%) sem classificação ANBIMA por carteira (padrão: %(default)s).",
+    )
     args = p.parse_args(argv)
 
     for nome in args.subindice or sorted(SUBINDICES):
-        run_ihfa_subindex(nome, upload=not args.no_upload, min_coverage=args.min_coverage)
+        run_ihfa_subindex(
+            nome,
+            upload=not args.no_upload,
+            min_coverage=args.min_coverage,
+            max_unclassified=args.max_unclassified,
+        )
 
 
 if __name__ == "__main__":
