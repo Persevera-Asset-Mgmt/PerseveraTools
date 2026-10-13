@@ -6,6 +6,7 @@ import numpy as np
 
 from persevera_tools.fixed_income.data import get_emissions, get_series, get_references
 from persevera_tools.utils.dates import get_holidays
+from persevera_tools.data.indicators import get_series as get_indicator_series
 
 
 def _macaulay_duration(
@@ -24,9 +25,15 @@ def _macaulay_duration(
     coupons are spaced 1/coupon_frequency apart. This preserves the fractional
     time to maturity instead of rounding it to whole coupon periods.
 
+    Rates follow the Brazilian convention: both ``ytm`` and ``coupon_rate`` are
+    effective annual rates, so the per-period coupon is
+    ``(1 + coupon_rate) ** (1 / f) - 1`` (6% a.a. semiannual = 2.956% per
+    semester, as in the NTN-B) and cash flows are discounted by
+    ``(1 + ytm) ** t``.
+
     Args:
-        ytm: Annual yield to maturity as a decimal (e.g., 0.12 for 12%).
-        coupon_rate: Annual coupon rate as a decimal (0.0 for zero-coupon bonds).
+        ytm: Effective annual yield to maturity as a decimal (e.g., 0.12 for 12%).
+        coupon_rate: Effective annual coupon rate as a decimal (0.0 for zero-coupon bonds).
         years_to_maturity: Remaining time to maturity in years.
         coupon_frequency: Number of coupon payments per year (default: 1).
     Returns:
@@ -38,8 +45,7 @@ def _macaulay_duration(
         return 0.0
 
     f = coupon_frequency
-    y = ytm / f
-    c = coupon_rate / f
+    c = (1.0 + coupon_rate) ** (1.0 / f) - 1.0
 
     # Number of cash flows: one per coupon date in (0, T], measured back from T.
     n = max(1, int(np.ceil(years_to_maturity * f - 1e-9)))
@@ -47,7 +53,7 @@ def _macaulay_duration(
     cash_flows = np.full(n, c)
     cash_flows[0] += 1.0  # face value paid at maturity (times[0] == T)
 
-    pv_flows = cash_flows / (1.0 + y) ** (f * times)
+    pv_flows = cash_flows / (1.0 + ytm) ** times
     total_pv = pv_flows.sum()
     return float((times * pv_flows).sum() / total_pv) if total_pv > 0 else 0.0
 
@@ -76,14 +82,65 @@ def _business_days_252(
     return int(np.busday_count(begin, end, holidays=holidays))
 
 
+# Fração descartada em cada ponta antes de calcular a média e a média ponderada
+# dos spreads. A base tem emissores em estresse (spreads de centenas a 10^59 p.p.)
+# e debêntures em "% do DI" cadastradas como "DI + spread" (~108). Com 5%, a
+# série IPCA incentivada de 2017 (74 debêntures, 5 valores absurdos) continuava
+# contaminada; 10% resolve sem mudar a série DI de forma relevante.
+DEFAULT_SPREAD_TRIM = 0.10
+
+
+def _trim_mask(values: pd.DataFrame, trim: float) -> pd.DataFrame:
+    """True for the values kept after dropping ``floor(n * trim)`` at each tail of each row."""
+    if trim <= 0:
+        return values.notna()
+    ranks = values.rank(axis=1, method='first')
+    n = values.count(axis=1)
+    k = np.floor(n * trim)
+    return ranks.gt(k, axis=0) & ranks.le(n - k, axis=0)
+
+
+def _outstanding_volume(
+    series: pd.DataFrame,
+    emissions: pd.DataFrame,
+    start_date,
+    end_date,
+) -> pd.DataFrame:
+    """Outstanding volume proxy per (date, code): ANBIMA ``par_value`` x issued quantity.
+
+    ``par_value`` (PU par) reflects amortizations; it only exists from 2021-04.
+    Before that, or for codes without it, the nominal value at issuance is used.
+    """
+    codes = list(series.columns)
+    try:
+        par = get_series(code=codes, source='anbima', category='credito_privado_di',
+                         start_date=start_date, end_date=end_date, field='par_value')
+    except ValueError:
+        par = pd.DataFrame()
+    par = par.reindex(index=series.index, columns=series.columns).ffill()
+    emis = emissions.drop_duplicates('code').set_index('code')
+    par = par.fillna(emis['valor_nominal_na_emissao'].reindex(series.columns))
+    return par * emis['quantidade_emitida'].reindex(series.columns)
+
+
 def calculate_spread(
     index_code: str,
     start_date: Optional[Union[str, datetime, pd.Timestamp]] = None,
     end_date: Optional[Union[str, datetime, pd.Timestamp]] = None,
     field: Union[str, List[str]] = 'yield_to_maturity',
     calculate_distribution: bool = False,
-    deb_incent_lei_12431: Optional[bool] = None) -> pd.DataFrame:
+    deb_incent_lei_12431: Optional[bool] = None,
+    trim: float = DEFAULT_SPREAD_TRIM) -> pd.DataFrame:
     """Calculate the spread for a given index code.
+
+    - DI: ANBIMA indicative rate of "DI + spread" debentures (already a spread).
+    - IPCA: debenture indicative rate minus the NTN-B yield at its reference maturity.
+
+    ``median`` and the distribution counts use every debenture. ``mean`` and
+    ``weighted_mean`` are trimmed: on each date the ``floor(n * trim)`` lowest
+    and highest spreads are dropped first. ``weighted_mean`` and the volume
+    columns weight by outstanding volume (ANBIMA ``par_value`` x issued
+    quantity; nominal value at issuance before 2021-04).
 
     Args:
         index_code: Single index code. Supported values: 'DI', 'IPCA'.
@@ -92,6 +149,7 @@ def calculate_spread(
         field: Field or list of fields to retrieve (default: 'yield_to_maturity').
         calculate_distribution: Whether to calculate the distribution of the spread.
         deb_incent_lei_12431: Whether to filter emissions under Lei 12431 (default: None).
+        trim: Fraction dropped at each tail for ``mean`` / ``weighted_mean`` (default 10%).
     Returns:
         DataFrame with spread data, indexed by 'date'.
     Raises:
@@ -108,7 +166,8 @@ def calculate_spread(
                 series = series.xs(selected_field, axis=1, level='field')
             if 'source' in series.columns.names:
                 series = series.xs('anbima', axis=1, level='source')
-        series = series.interpolate(limit=5)
+        # Only fill gaps between two quotes: no extrapolation after the last one.
+        series = series.interpolate(limit=5, limit_area='inside')
     elif index_code == 'IPCA':
         codes = emissions['code'].tolist()
         series_ipca = get_series(code=codes, source='anbima', category='credito_privado_ipca', start_date=start_date, end_date=end_date, field=field)
@@ -118,17 +177,23 @@ def calculate_spread(
         series_wide = (
             series_ipca.drop_duplicates(subset=['date', 'code'])
             .pivot(index='date', columns='code', values='value')
-            .interpolate(limit=5)
+            .interpolate(limit=5, limit_area='inside')
         )
 
         # References: pivot to wide (date × code → reference maturity) so that the
         # NTN-B lookup can be done with a single vectorised reindex instead of two
-        # long-format merges. Forward/back-fill covers interpolated dates.
+        # long-format merges. The table only records changes and starts in
+        # 2018-01; earlier dates take each code's first known reference.
         references = get_references(code=codes, start_date=start_date, end_date=end_date)
         references = references.sort_values(['code', 'date'])
-        references['reference'] = references.groupby('code')['reference'].ffill().bfill()
+        # Fill within each code only: a code without any reference must not
+        # inherit the next code's benchmark.
+        references['reference'] = references.groupby('code')['reference'].transform(
+            lambda s: s.ffill().bfill()
+        )
         ref_wide = (
-            references.drop_duplicates(subset=['date', 'code'])
+            references.dropna(subset=['reference'])
+            .drop_duplicates(subset=['date', 'code'])
             .pivot(index='date', columns='code', values='reference')
             .reindex(index=series_wide.index)
             .ffill().bfill()
@@ -164,21 +229,26 @@ def calculate_spread(
         )
 
         # Spread: single wide-format subtraction, then interpolate gaps.
-        series = (series_wide - ytm_ntnb_wide).interpolate(limit=5)
+        series = (series_wide - ytm_ntnb_wide).interpolate(limit=5, limit_area='inside')
     else:
         raise ValueError("Invalid index code")
 
     emissions = emissions[emissions['code'].isin(series.columns)]
-
-    volume_map = emissions.set_index('code')['volume_emissao']
+    series = series[[c for c in series.columns if c in set(emissions['code'])]]
     series = series.mask(series == 0.)
-    volume_df = series.where(series.isna(), 1) * volume_map
-    weight_df = volume_df.div(volume_df.sum(axis=1), axis=0)
+
+    volume_df = _outstanding_volume(series, emissions, start_date, end_date).where(series.notna())
+    kept = _trim_mask(series, trim)
+    series_kept = series.where(kept)
+    volume_kept = volume_df.where(kept)
 
     spread = pd.DataFrame(index=series.index)
     spread['median'] = series.median(axis=1)
-    spread['mean'] = series.mean(axis=1)
-    spread['weighted_mean'] = (series * weight_df).sum(axis=1)
+    spread['mean'] = series_kept.mean(axis=1)
+    spread['weighted_mean'] = (
+        (series_kept * volume_kept).sum(axis=1, min_count=1)
+        / volume_kept.sum(axis=1, min_count=1)
+    )
 
     if calculate_distribution:
         # Extract raw numpy arrays once and use column broadcasting to avoid
@@ -306,6 +376,12 @@ def _broadcast_param(value, codes: list, name: str) -> dict:
     return {c: value for c in codes}
 
 
+CDI_SERIES_CODE = 'br_cdi_yield'
+# Dias úteis entre a data do dado e a data pedida acima dos quais o resultado
+# é marcado como desatualizado (``stale``).
+DEFAULT_MAX_STALE_DAYS = 5
+
+
 def calculate_duration(
     code: Union[str, List[str], pd.Series, pd.Index],
     maturity_date: Optional[Union[str, datetime, pd.Timestamp, list, tuple, dict, pd.Series]] = None,
@@ -315,27 +391,33 @@ def calculate_duration(
     coupon_frequency: Union[int, list, tuple, dict, pd.Series] = 1,
     indice: Optional[Union[str, list, tuple, dict, pd.Series]] = None,
     use_anbima: bool = True,
+    max_stale_days: int = DEFAULT_MAX_STALE_DAYS,
 ) -> Union[dict, pd.DataFrame]:
-    """Calculate Macaulay Duration for one or more fixed income assets.
+    """Calculate Macaulay Duration (in years) for one or more fixed income assets.
 
     Accepts a single code (str) or a collection of codes (list, tuple, set,
     pandas Series/Index, e.g. a DataFrame column). For a single code a dict is
     returned; for a collection a DataFrame indexed by code is returned.
 
     For each asset it attempts first to use the duration published by ANBIMA in
-    the database. If unavailable (e.g. CRI, CRA, CDB), it falls back to an
+    the database (published in business days and converted here to years,
+    DU/252). If unavailable (e.g. CRI, CRA, CDB), it falls back to an
     analytical calculation using the yield to maturity (from the database, or
     provided via ``ytm``) and the ``maturity_date`` supplied by the caller.
     The maturity is never looked up in the database.
 
     The analytical fallback assumes a bullet structure (no amortization) with
     periodic coupons. When coupon_rate is not provided, a par-bond approximation
-    is used (coupon_rate = ytm), which is accurate for bonds trading near par.
+    is used (coupon_rate = yield), which is accurate for bonds trading near par.
     For zero-coupon bonds, pass coupon_rate=0.0; duration equals years_to_maturity.
 
-    Day count conventions:
-    - DI-linked bonds: DU/252 (ANBIMA holiday calendar from the database).
-    - IPCA-linked and pre-fixed bonds: ACT/365.
+    Conventions (Brazilian market): time in business days / 252 with the
+    ANBIMA holiday calendar, and effective annual rates (see
+    :func:`_macaulay_duration`). For ``indice='DI'`` the yield — from the
+    database or from ``ytm`` — is the spread over CDI ("DI + spread", as ANBIMA
+    publishes it); cash flows are discounted at the full rate
+    ``(1 + CDI) * (1 + spread) - 1``, with CDI from ``br_cdi_yield`` on the
+    settlement date.
 
     Per-asset parameters: ``maturity_date``, ``indice``, ``ytm`` and
     ``coupon_rate`` accept either a single scalar (applied to every code), a
@@ -354,15 +436,17 @@ def calculate_duration(
                        fallback is used (i.e. when an ANBIMA duration is not
                        available or ``ytm`` is provided). Scalar, list/tuple
                        aligned to codes, or dict/Series keyed by code.
-        settlement_date: Calculation date. Defaults to the most recent available date.
-        ytm: Annual yield to maturity as a decimal (e.g., 0.12 for 12%). When
-             provided for a code, skips the database lookup for yield (and the
-             ANBIMA duration lookup) for that code. Scalar, list/tuple, or
+        settlement_date: Calculation date. Defaults to today; database values
+                         are the latest on or before it.
+        ytm: Annual yield to maturity as a decimal (e.g., 0.12 for 12%); for
+             ``indice='DI'`` the spread over CDI (e.g., 0.015 for DI + 1.5%).
+             When provided for a code, skips the database lookup for yield (and
+             the ANBIMA duration lookup) for that code. Scalar, list/tuple, or
              dict/Series keyed by code. Required for assets without historical
              series or for prospective/future settlement dates, EXCEPT for
              zero-coupon/bullet bonds (coupon_rate=0.0), where the yield is not
              needed because duration equals the time to maturity.
-        coupon_rate: Annual coupon rate as a decimal (e.g., 0.12 for 12%).
+        coupon_rate: Effective annual coupon rate as a decimal (e.g., 0.12 for 12%).
                      Use 0.0 for zero-coupon/bullet bonds such as a CDB that
                      pays principal and interest only at maturity; in that case
                      duration equals the time to maturity and no ytm is required.
@@ -371,26 +455,32 @@ def calculate_duration(
         coupon_frequency: Number of coupon payments per year (default: 1, annual).
                           Accepts a scalar (applied to all codes), or a list/tuple
                           aligned positionally, or a dict/Series keyed by code.
-        indice: Index type used to select the day count convention: 'DI' uses
-                DU/252; any other value uses ACT/365. Scalar or per-code.
-                Defaults to 'DI' when omitted.
+        indice: 'DI' means the yield is a spread over CDI; any other value
+                (e.g. 'IPCA', 'PRE') means the yield is the full rate. Scalar
+                or per-code. Defaults to 'DI' (with a warning) when omitted.
         use_anbima: If True, returns the ANBIMA-published duration when available.
+        max_stale_days: Business days between the data date and
+                        ``settlement_date`` above which ``stale`` is True.
     Returns:
         For a single code, a dict with keys:
             - 'macaulay_duration': Macaulay Duration in years.
-            - 'years_to_maturity': Remaining time to maturity in years (None if ANBIMA source).
-            - 'ytm': Yield to maturity used (decimal).
+            - 'years_to_maturity': Remaining time to maturity in years, DU/252
+              (None if ANBIMA source).
+            - 'ytm': Yield as published/provided (decimal; spread over CDI for DI).
+            - 'cdi': CDI used to build the full DI rate (decimal; None otherwise).
             - 'coupon_rate': Coupon rate used (decimal, None if ANBIMA source).
             - 'par_bond_approximation': True if coupon_rate was not provided and ytm was
               used as a proxy (par-bond approximation); False otherwise; NaN for no_data rows.
             - 'source': 'anbima', 'calculated', or 'no_data'.
-            - 'settlement_date': The settlement date used for the calculation.
+            - 'settlement_date': The date of the data used for the calculation.
+            - 'stale': True if that date is more than ``max_stale_days`` business
+              days before ``settlement_date``.
         For a collection of codes, a DataFrame with those keys as columns,
         indexed by code. Codes with missing data get NaN values and source
         'no_data' (instead of raising).
     Raises:
-        ValueError: For a single code, if required data (yield or maturity) is
-                    missing; or if a per-code list length does not match codes.
+        ValueError: For a single code, if required data (yield, maturity or
+                    CDI) is missing; or if a per-code list length does not match codes.
     """
     codes, single = _normalize_codes(code)
 
@@ -419,25 +509,54 @@ def calculate_duration(
         if use_anbima:
             dur_map = _fetch_anbima_field(codes_db, 'duration', end_date_str)
 
-    holiday_holder: dict = {}
+    lazy: dict = {}
 
     def _holidays_arr() -> np.ndarray:
-        if 'arr' not in holiday_holder:
-            holiday_holder['arr'] = np.array(
+        if 'holidays' not in lazy:
+            lazy['holidays'] = np.array(
                 [np.datetime64(pd.Timestamp(h).date(), 'D') for h in get_holidays()],
                 dtype='datetime64[D]',
             )
-        return holiday_holder['arr']
+        return lazy['holidays']
+
+    def _cdi_on(date) -> Optional[float]:
+        """CDI (decimal, annual) on the last date on or before ``date``."""
+        if 'cdi' not in lazy:
+            try:
+                cdi = get_indicator_series(CDI_SERIES_CODE, end_date=end_date_str)
+                lazy['cdi'] = (cdi.iloc[:, 0] if isinstance(cdi, pd.DataFrame) else cdi).dropna().sort_index()
+            except ValueError:
+                lazy['cdi'] = pd.Series(dtype=float)
+        cdi = lazy['cdi'].loc[:pd.Timestamp(date)]
+        return float(cdi.iloc[-1]) / 100.0 if not cdi.empty else None
+
+    def _is_stale(data_date) -> bool:
+        lag = _business_days_252(pd.Timestamp(data_date), settlement_dt, _holidays_arr())
+        return lag > max_stale_days
+
+    def _resolve_indice(bond_code: str) -> str:
+        if indice_map[bond_code] is not None:
+            return indice_map[bond_code]
+        warnings.warn(
+            f"indice not specified for '{bond_code}'; defaulting to 'DI' (yield read as "
+            "spread over CDI). Pass indice='IPCA' (or another value) for bonds whose "
+            "yield is the full rate.",
+            UserWarning,
+            stacklevel=4,
+        )
+        return 'DI'
 
     def _no_data_row(ytm_decimal=None, settlement=None) -> dict:
         return {
             'macaulay_duration': np.nan,
             'years_to_maturity': np.nan,
             'ytm': ytm_decimal,
+            'cdi': None,
             'coupon_rate': np.nan,
             'par_bond_approximation': np.nan,
             'source': 'no_data',
             'settlement_date': settlement,
+            'stale': np.nan,
         }
 
     def _compute(bond_code: str) -> dict:
@@ -454,17 +573,22 @@ def calculate_duration(
             ytm_val = None
             if bond_code in ytm_map:
                 ytm_val = float(ytm_map[bond_code].iloc[-1]) / 100.0
+            data_date = dur_series.index[-1]
             return {
-                'macaulay_duration': float(dur_series.iloc[-1]),
+                # ANBIMA publishes duration in business days.
+                'macaulay_duration': float(dur_series.iloc[-1]) / 252.0,
                 'years_to_maturity': None,
                 'ytm': ytm_val,
+                'cdi': None,
                 'coupon_rate': None,
                 'par_bond_approximation': False,
                 'source': 'anbima',
-                'settlement_date': dur_series.index[-1],
+                'settlement_date': data_date,
+                'stale': _is_stale(data_date),
             }
 
         # 2. Resolve yield to maturity and the effective settlement date.
+        stale = False
         if user_ytm is not None:
             ytm_decimal = user_ytm
             actual_settlement = settlement_dt
@@ -472,6 +596,7 @@ def calculate_duration(
             ytm_series = ytm_map[bond_code]
             ytm_decimal = float(ytm_series.iloc[-1]) / 100.0
             actual_settlement = ytm_series.index[-1]
+            stale = _is_stale(actual_settlement)
         elif is_zero_coupon:
             # No yield available, but none is needed for a single-cash-flow bond.
             ytm_decimal = None
@@ -485,7 +610,7 @@ def calculate_duration(
         else:
             return _no_data_row()
 
-        # 3. Resolve maturity date (caller-supplied only) and day count convention.
+        # 3. Resolve maturity date (caller-supplied only).
         bond_maturity = maturity_map[bond_code]
         if bond_maturity is None:
             if single:
@@ -495,58 +620,51 @@ def calculate_duration(
                 )
             return _no_data_row(ytm_decimal, actual_settlement)
         bond_maturity = pd.Timestamp(bond_maturity)
-        if indice_map[bond_code] is not None:
-            bond_indice = indice_map[bond_code]
-        else:
-            bond_indice = 'DI'
-            warnings.warn(
-                f"indice not specified for '{bond_code}'; defaulting to 'DI' (DU/252). "
-                "Pass indice='IPCA' (or another value) for IPCA-linked or pre-fixed bonds "
-                "to use the ACT/365 day-count convention.",
-                UserWarning,
-                stacklevel=3,
-            )
+
+        # 4. Full discount rate: DI yields are spreads over CDI.
+        cdi_used = None
+        rate = ytm_decimal
+        if ytm_decimal is not None and _resolve_indice(bond_code) == 'DI':
+            cdi_used = _cdi_on(actual_settlement)
+            if cdi_used is None:
+                if single:
+                    raise ValueError(
+                        f"No {CDI_SERIES_CODE} on or before {pd.Timestamp(actual_settlement).date()} "
+                        f"to build the DI rate of '{bond_code}'."
+                    )
+                return _no_data_row(ytm_decimal, actual_settlement)
+            rate = (1.0 + cdi_used) * (1.0 + ytm_decimal) - 1.0
 
         is_par_bond_approx = coupon_value is None
-        effective_coupon = coupon_value if coupon_value is not None else ytm_decimal
+        effective_coupon = coupon_value if coupon_value is not None else rate
 
-        days_to_maturity = (bond_maturity - pd.Timestamp(actual_settlement)).days
-        if days_to_maturity <= 0:
-            return {
-                'macaulay_duration': 0.0,
-                'years_to_maturity': 0.0,
-                'ytm': ytm_decimal,
-                'coupon_rate': effective_coupon,
-                'par_bond_approximation': is_par_bond_approx,
-                'source': 'calculated',
-                'settlement_date': actual_settlement,
-            }
-
-        if bond_indice == 'DI':
-            bdays = _business_days_252(actual_settlement, bond_maturity, _holidays_arr())
-            years_to_maturity = bdays / 252.0
-        else:
-            years_to_maturity = days_to_maturity / 365.0
-
-        freq = coupon_freq_map[bond_code] if coupon_freq_map[bond_code] is not None else 1
-        macaulay_dur = _macaulay_duration(ytm_decimal, effective_coupon, years_to_maturity, freq)
-
-        return {
-            'macaulay_duration': macaulay_dur,
-            'years_to_maturity': years_to_maturity,
+        base = {
             'ytm': ytm_decimal,
+            'cdi': cdi_used,
             'coupon_rate': effective_coupon,
             'par_bond_approximation': is_par_bond_approx,
             'source': 'calculated',
             'settlement_date': actual_settlement,
+            'stale': stale,
         }
+        if bond_maturity <= pd.Timestamp(actual_settlement):
+            return {'macaulay_duration': 0.0, 'years_to_maturity': 0.0, **base}
+
+        bdays = _business_days_252(actual_settlement, bond_maturity, _holidays_arr())
+        years_to_maturity = bdays / 252.0
+
+        freq = coupon_freq_map[bond_code] if coupon_freq_map[bond_code] is not None else 1
+        macaulay_dur = _macaulay_duration(rate, effective_coupon, years_to_maturity, freq)
+
+        return {'macaulay_duration': macaulay_dur, 'years_to_maturity': years_to_maturity, **base}
 
     results = {bond_code: _compute(bond_code) for bond_code in codes}
 
     if single:
         return results[codes[0]]
 
-    columns = ['macaulay_duration', 'years_to_maturity', 'ytm', 'coupon_rate', 'par_bond_approximation', 'source', 'settlement_date']
+    columns = ['macaulay_duration', 'years_to_maturity', 'ytm', 'cdi', 'coupon_rate',
+               'par_bond_approximation', 'source', 'settlement_date', 'stale']
     df = pd.DataFrame.from_dict(results, orient='index')[columns]
     df.index.name = 'code'
     return df
