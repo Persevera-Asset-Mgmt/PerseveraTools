@@ -985,8 +985,9 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
 
         Returns:
             DataFrame ``[identificador, data_vigencia, tipo_anbima]`` com o
-            identificador como recebido. Os não encontrados na ANBIMA ficam de
-            fora, com aviso no log.
+            identificador como recebido. Ficam de fora, com aviso no log listando
+            os identificadores: os ausentes da listagem, os com histórico
+            indisponível (404) e os cujo histórico não traz ``tipo_anbima``.
         """
         ids = list(dict.fromkeys(codigos_ou_cnpjs))
         if any(
@@ -998,6 +999,8 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
         historicos: Dict[str, Dict[str, Any]] = {}
         rows: List[Dict[str, Any]] = []
         missing: List[str] = []
+        sem_historico: List[str] = []
+        sem_tipo: List[str] = []
         for k, ident in enumerate(ids, 1):
             codigo_classe: Optional[str] = None
             if self._is_cnpj(ident):
@@ -1016,9 +1019,13 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
                         f"{FUNDOS_BASE_PATH}/{codigo_fundo}/historico"
                     )
                 except AnbimaFeedNotFoundError:
-                    historicos[codigo_fundo] = {}
+                    historicos[codigo_fundo] = None
+            if historicos[codigo_fundo] is None:
+                sem_historico.append(ident)
+                continue
             classes = historicos[codigo_fundo].get("classes") or []
             match = [c for c in classes if codigo_classe and c.get("codigo_classe") == codigo_classe]
+            n_antes = len(rows)
             for cls in match or classes[:1]:
                 for h in cls.get("historico_composicao_classe") or []:
                     if h.get("tipo_anbima"):
@@ -1027,14 +1034,21 @@ class AnbimaFundosProvider(AnbimaFeedProvider):
                             "data_vigencia": h.get("data_vigencia"),
                             "tipo_anbima": h["tipo_anbima"],
                         })
+            if len(rows) == n_antes:
+                sem_tipo.append(ident)
             if k % 100 == 0 or k == len(ids):
                 logger.info("get_classificacao_historica: [%d/%d] fundos", k, len(ids))
 
-        if missing:
-            logger.warning(
-                "get_classificacao_historica: %d/%d identificadores não encontrados na ANBIMA: %s",
-                len(missing), len(ids), missing[:10],
-            )
+        for lista, motivo in (
+            (missing, "não encontrados na listagem ANBIMA"),
+            (sem_historico, "com histórico indisponível (404)"),
+            (sem_tipo, "sem tipo_anbima no histórico"),
+        ):
+            if lista:
+                logger.warning(
+                    "get_classificacao_historica: %d/%d identificadores %s: %s",
+                    len(lista), len(ids), motivo, lista,
+                )
 
         df = pd.DataFrame(rows, columns=["identificador", "data_vigencia", "tipo_anbima"])
         df["data_vigencia"] = pd.to_datetime(df["data_vigencia"], errors="coerce")
