@@ -1,4 +1,4 @@
-"""Derive fixed-income spread series and optionally upsert into ``indicadores``."""
+"""Derive fixed-income spread and duration series and optionally upsert into ``indicadores``."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any, Mapping, Optional, Sequence, Union
 import pandas as pd
 
 from ..db.operations import to_sql
-from .metrics import calculate_spread
+from .metrics import calculate_spread, calculate_duration_stats
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,29 @@ SPREAD_SERIES: tuple[Mapping[str, Any], ...] = (
         "calculate_distribution": True,
     },
 )
+
+DURATION_SERIES: tuple[Mapping[str, Any], ...] = (
+    {
+        "code": "persevera_anbima_debentures_duration_di",
+        "metric": "duration",
+        "index_code": "DI",
+        "deb_incent_lei_12431": False,
+        "calculate_distribution": True,
+    },
+    {
+        "code": "persevera_anbima_debentures_duration_ipca_incent",
+        "metric": "duration",
+        "index_code": "IPCA",
+        "deb_incent_lei_12431": True,
+        "calculate_distribution": True,
+    },
+)
+
+# Configs without a "metric" key default to "spread".
+_METRIC_FUNCS = {
+    "spread": calculate_spread,
+    "duration": calculate_duration_stats,
+}
 
 
 def _spread_to_long(spread: pd.DataFrame, code: str) -> pd.DataFrame:
@@ -56,25 +79,26 @@ def run_spread_pipeline(
     batch_size: int = 5000,
     series: Sequence[Mapping[str, Any]] | None = None,
 ) -> pd.DataFrame:
-    """Calculate configured debenture spread series and optionally upsert to DB.
+    """Calculate configured debenture spread/duration series and optionally upsert to DB.
 
     Args:
-        start_date: Start date passed to ``calculate_spread``.
+        start_date: Start date passed to ``calculate_spread`` / ``calculate_duration_stats``.
         end_date: Optional end date filter.
         upload: Whether to upsert into ``table_name``.
         table_name: Target table (default ``indicadores``).
         primary_keys: Upsert conflict keys.
         batch_size: Batch size for ``to_sql``.
-        series: Optional override of ``SPREAD_SERIES`` configs.
+        series: Optional override of ``SPREAD_SERIES + DURATION_SERIES`` configs.
 
     Returns:
         Long-format DataFrame with columns ``date``, ``code``, ``field``, ``value``.
     """
-    configs = list(series) if series is not None else list(SPREAD_SERIES)
+    configs = list(series) if series is not None else [*SPREAD_SERIES, *DURATION_SERIES]
     chunks: list[pd.DataFrame] = []
 
     for cfg in configs:
         code = cfg["code"]
+        metric = cfg.get("metric", "spread")
         kwargs = {
             "index_code": cfg["index_code"],
             "start_date": start_date,
@@ -82,15 +106,15 @@ def run_spread_pipeline(
             "calculate_distribution": cfg.get("calculate_distribution", True),
             "deb_incent_lei_12431": cfg.get("deb_incent_lei_12431"),
         }
-        logger.info("Calculating spread series %s (%s)", code, kwargs["index_code"])
-        spread = calculate_spread(**kwargs)
-        long_df = _spread_to_long(spread, code)
+        logger.info("Calculating %s series %s (%s)", metric, code, kwargs["index_code"])
+        stats = _METRIC_FUNCS[metric](**kwargs)
+        long_df = _spread_to_long(stats, code)
         logger.info("Series %s produced %d rows", code, len(long_df))
         if not long_df.empty:
             chunks.append(long_df)
 
     if not chunks:
-        logger.warning("No spread rows produced; skipping upload")
+        logger.warning("No rows produced; skipping upload")
         return pd.DataFrame(columns=["date", "code", "field", "value"])
 
     result = pd.concat(chunks, ignore_index=True)

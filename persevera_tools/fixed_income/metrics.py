@@ -163,29 +163,14 @@ def calculate_spread(
         ValueError: If index_code is not 'DI' or 'IPCA'.
     """
     emissions = get_emissions(index_code=index_code, deb_incent_lei_12431=deb_incent_lei_12431)
+    codes = _select_codes(emissions, index_code)
 
     if index_code == 'DI':
-        codes = emissions[emissions['percentual_multiplicador_rentabilidade'] == 100]['code'].tolist()
-        series = get_series(code=codes, source='anbima', category='credito_privado_di', start_date=start_date, end_date=end_date, field=field)
-        if isinstance(series.columns, pd.MultiIndex):
-            selected_field = field[0] if isinstance(field, list) and len(field) > 0 else (field if isinstance(field, str) else 'yield_to_maturity')
-            if 'field' in series.columns.names:
-                series = series.xs(selected_field, axis=1, level='field')
-            if 'source' in series.columns.names:
-                series = series.xs('anbima', axis=1, level='source')
         # Only fill gaps between two quotes: no extrapolation after the last one.
-        series = series.interpolate(limit=5, limit_area='inside')
+        series = _get_wide_series(codes, index_code, field, start_date, end_date).interpolate(limit=5, limit_area='inside')
     elif index_code == 'IPCA':
-        codes = emissions['code'].tolist()
-        series_ipca = get_series(code=codes, source='anbima', category='credito_privado_ipca', start_date=start_date, end_date=end_date, field=field)
-        series_ipca['value'] = series_ipca['value'].mask(series_ipca['value'] == 0.)
-
-        # Pivot once to wide and interpolate — avoids the costly stack/re-pivot cycle.
-        series_wide = (
-            series_ipca.drop_duplicates(subset=['date', 'code'])
-            .pivot(index='date', columns='code', values='value')
-            .interpolate(limit=5, limit_area='inside')
-        )
+        series_wide = _get_wide_series(codes, index_code, field, start_date, end_date)
+        series_wide = series_wide.mask(series_wide == 0.).interpolate(limit=5, limit_area='inside')
 
         # References: pivot to wide (date × code → reference maturity) so that the
         # NTN-B lookup can be done with a single vectorised reindex instead of two
@@ -257,6 +242,116 @@ def calculate_spread(
     else:
         raise ValueError("Invalid index code")
 
+    return _cross_section_stats(series, emissions, start_date, end_date, trim, calculate_distribution, SPREAD_BUCKETS)
+
+
+def calculate_duration_stats(
+    index_code: str,
+    start_date: Optional[Union[str, datetime, pd.Timestamp]] = None,
+    end_date: Optional[Union[str, datetime, pd.Timestamp]] = None,
+    calculate_distribution: bool = False,
+    deb_incent_lei_12431: Optional[bool] = None,
+    trim: float = DEFAULT_SPREAD_TRIM) -> pd.DataFrame:
+    """Calculate cross-sectional duration statistics for a given index code.
+
+    Same universe and aggregation as ``calculate_spread`` (trimmed ``mean`` /
+    ``weighted_mean``, outstanding-volume weights), applied to the
+    ANBIMA-published duration, converted from business days to years (/252).
+
+    Args:
+        index_code: Single index code. Supported values: 'DI', 'IPCA'.
+        start_date: Optional start date filter as string 'YYYY-MM-DD', datetime, or pandas Timestamp.
+        end_date: Optional end date filter as string 'YYYY-MM-DD', datetime, or pandas Timestamp.
+        calculate_distribution: Whether to calculate the distribution of the duration.
+        deb_incent_lei_12431: Whether to filter emissions under Lei 12431 (default: None).
+        trim: Fraction dropped at each tail for ``mean`` / ``weighted_mean`` (default 10%).
+    Returns:
+        DataFrame with duration statistics in years, indexed by 'date'.
+    Raises:
+        ValueError: If index_code is not 'DI' or 'IPCA'.
+    """
+    emissions = get_emissions(index_code=index_code, deb_incent_lei_12431=deb_incent_lei_12431)
+    codes = _select_codes(emissions, index_code)
+
+    series = _get_wide_series(codes, index_code, 'duration', start_date, end_date)
+    series = series.mask(series == 0.).interpolate(limit=5, limit_area='inside') / 252
+
+    return _cross_section_stats(series, emissions, start_date, end_date, trim, calculate_distribution, DURATION_BUCKETS)
+
+
+# Distribution buckets as (column name, lower bound inclusive, upper bound exclusive).
+# Spread values are in % p.a. (0.50 == 50bp); duration values are in years.
+SPREAD_BUCKETS = (
+    ('count_yield_under_neg50bp', -np.inf, -0.50),
+    ('count_yield_neg50_0bp',     -0.50,    0.00),
+    ('count_yield_0_50bp',         0.00,    0.50),
+    ('count_yield_50_75bp',        0.50,    0.75),
+    ('count_yield_75_100bp',       0.75,    1.00),
+    ('count_yield_100_150bp',      1.00,    1.50),
+    ('count_yield_150_250bp',      1.50,    2.50),
+    ('count_yield_above_250bp',    2.50,  np.inf),
+)
+
+DURATION_BUCKETS = (
+    ('count_duration_under_1y',  -np.inf, 1.0),
+    ('count_duration_1_3y',       1.0,    3.0),
+    ('count_duration_3_5y',       3.0,    5.0),
+    ('count_duration_5_7y',       5.0,    7.0),
+    ('count_duration_above_7y',   7.0,  np.inf),
+)
+
+
+def _select_codes(emissions: pd.DataFrame, index_code: str) -> List[str]:
+    """Select the asset universe for an index code (DI: only 100% of CDI)."""
+    if index_code == 'DI':
+        return emissions[emissions['percentual_multiplicador_rentabilidade'] == 100]['code'].tolist()
+    if index_code == 'IPCA':
+        return emissions['code'].tolist()
+    raise ValueError("Invalid index code")
+
+
+def _get_wide_series(
+    codes: List[str],
+    index_code: str,
+    field: Union[str, List[str]],
+    start_date: Optional[Union[str, datetime, pd.Timestamp]],
+    end_date: Optional[Union[str, datetime, pd.Timestamp]]) -> pd.DataFrame:
+    """Fetch one ANBIMA field for the given codes as a wide (date × code) DataFrame.
+
+    No interpolation or zero-masking is applied; callers handle both.
+    """
+    if index_code == 'DI':
+        series = get_series(code=codes, source='anbima', category='credito_privado_di', start_date=start_date, end_date=end_date, field=field)
+        if isinstance(series.columns, pd.MultiIndex):
+            selected_field = field[0] if isinstance(field, list) and len(field) > 0 else (field if isinstance(field, str) else 'yield_to_maturity')
+            if 'field' in series.columns.names:
+                series = series.xs(selected_field, axis=1, level='field')
+            if 'source' in series.columns.names:
+                series = series.xs('anbima', axis=1, level='source')
+        return series
+
+    # IPCA category returns long format (date, code, value); pivot once to wide.
+    series = get_series(code=codes, source='anbima', category='credito_privado_ipca', start_date=start_date, end_date=end_date, field=field)
+    return (
+        series.drop_duplicates(subset=['date', 'code'])
+        .pivot(index='date', columns='code', values='value')
+    )
+
+
+def _cross_section_stats(
+    series: pd.DataFrame,
+    emissions: pd.DataFrame,
+    start_date,
+    end_date,
+    trim: float,
+    calculate_distribution: bool,
+    buckets: tuple) -> pd.DataFrame:
+    """Daily cross-sectional statistics of a wide (date × code) panel.
+
+    ``median`` and the distribution counts use every asset; ``mean`` and
+    ``weighted_mean`` are trimmed (``_trim_mask``). Weights are outstanding
+    volume (``_outstanding_volume``).
+    """
     emissions = emissions[emissions['code'].isin(series.columns)]
     series = series[[c for c in series.columns if c in set(emissions['code'])]]
     series = series.mask(series == 0.)
@@ -266,10 +361,10 @@ def calculate_spread(
     series_kept = series.where(kept)
     volume_kept = volume_df.where(kept)
 
-    spread = pd.DataFrame(index=series.index)
-    spread['median'] = series.median(axis=1)
-    spread['mean'] = series_kept.mean(axis=1)
-    spread['weighted_mean'] = (
+    stats = pd.DataFrame(index=series.index)
+    stats['median'] = series.median(axis=1)
+    stats['mean'] = series_kept.mean(axis=1)
+    stats['weighted_mean'] = (
         (series_kept * volume_kept).sum(axis=1, min_count=1)
         / volume_kept.sum(axis=1, min_count=1)
     )
@@ -278,35 +373,21 @@ def calculate_spread(
         # Extract raw numpy arrays once and use column broadcasting to avoid
         # repeated .T round-trips and redundant boolean recomputations.
         vals = series.to_numpy()
-        mean_col = spread['mean'].to_numpy()[:, np.newaxis]
+        mean_col = stats['mean'].to_numpy()[:, np.newaxis]
 
         above_mean = pd.DataFrame(vals > mean_col, index=series.index, columns=series.columns)
         under_mean = pd.DataFrame(vals <= mean_col, index=series.index, columns=series.columns)
 
-        spread['count_above_mean'] = above_mean.sum(axis=1)
-        spread['count_under_mean'] = under_mean.sum(axis=1)
-        spread['volume_above_mean'] = above_mean.mul(volume_df).sum(axis=1)
-        spread['volume_under_mean'] = under_mean.mul(volume_df).sum(axis=1)
+        stats['count_above_mean'] = above_mean.sum(axis=1)
+        stats['count_under_mean'] = under_mean.sum(axis=1)
+        stats['volume_above_mean'] = above_mean.mul(volume_df).sum(axis=1)
+        stats['volume_under_mean'] = under_mean.mul(volume_df).sum(axis=1)
 
-        # Compute each threshold mask once; reuse to build non-overlapping buckets.
-        lt_neg50 = vals < -0.50
-        lt_0     = vals <  0.00
-        lt_50    = vals <  0.50
-        lt_75    = vals <  0.75
-        lt_100   = vals <  1.00
-        lt_150   = vals <  1.50
-        lt_250   = vals <  2.50
+        # NaN compares False on both sides, so missing values fall in no bucket.
+        for name, lower, upper in buckets:
+            stats[name] = ((vals >= lower) & (vals < upper)).sum(axis=1)
 
-        spread['count_yield_under_neg50bp'] = lt_neg50.sum(axis=1)
-        spread['count_yield_neg50_0bp']     = (lt_0    & ~lt_neg50).sum(axis=1)
-        spread['count_yield_0_50bp']        = (lt_50   & ~lt_0   ).sum(axis=1)
-        spread['count_yield_50_75bp']       = (lt_75   & ~lt_50  ).sum(axis=1)
-        spread['count_yield_75_100bp']      = (lt_100  & ~lt_75  ).sum(axis=1)
-        spread['count_yield_100_150bp']     = (lt_150  & ~lt_100 ).sum(axis=1)
-        spread['count_yield_150_250bp']     = (lt_250  & ~lt_150 ).sum(axis=1)
-        spread['count_yield_above_250bp']   = (vals >= 2.50).sum(axis=1)
-
-    return spread
+    return stats
 
 
 def _normalize_codes(code) -> "tuple[list, bool]":
