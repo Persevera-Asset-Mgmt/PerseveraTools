@@ -56,22 +56,14 @@ class Settings:
         if os.getenv('PERSEVERA_LOG_LEVEL'):
             self.LOG_CONFIG['default_level'] = os.getenv('PERSEVERA_LOG_LEVEL')
 
-        # Load XP Wealth Services (XPWS) configuration
-        self.XPWS_TENANT_ID = os.getenv('PERSEVERA_XPWS_TENANT_ID')
-        self.XPWS_CLIENT_ID = os.getenv('PERSEVERA_XPWS_CLIENT_ID')
-        self.XPWS_CLIENT_SECRET = os.getenv('PERSEVERA_XPWS_CLIENT_SECRET')
-        self.XPWS_SCOPE = os.getenv('PERSEVERA_XPWS_SCOPE')
-        self.XPWS_BASE_URL = os.getenv('PERSEVERA_XPWS_BASE_URL')
-        # Optional service-specific base URLs
-        self.XPWS_ASSETS_BASE_URL = os.getenv('PERSEVERA_XPWS_ASSETS_BASE_URL')
-        self.XPWS_OPERATIONS_BASE_URL = os.getenv('PERSEVERA_XPWS_OPERATIONS_BASE_URL')
-        # Optional overrides/flags
-        self.XPWS_TOKEN_URL_OVERRIDE = os.getenv('PERSEVERA_XPWS_TOKEN_URL_OVERRIDE')
-        self.XPWS_VERIFY_SSL = os.getenv('PERSEVERA_XPWS_VERIFY_SSL', 'true')
-        self.XPWS_USER_AGENT = os.getenv('PERSEVERA_XPWS_USER_AGENT')
-        self.XPWS_POSITIONS_V2_USE_LEGACY_PATH = os.getenv(
-            'PERSEVERA_XPWS_POSITIONS_V2_USE_LEGACY_PATH', 'false'
-        )
+        # Load XP Data Access (XPWSProvider) configuration: token e chamadas passam por cenários Make,
+        # que guardam certificado mTLS e subscription key
+        self.XPWS_MAKE_TOKEN_SCENARIO_ID = os.getenv('PERSEVERA_XPWS_MAKE_TOKEN_SCENARIO_ID')
+        self.XPWS_MAKE_PROXY_SCENARIO_ID = os.getenv('PERSEVERA_XPWS_MAKE_PROXY_SCENARIO_ID')
+
+        # Make API (rodar cenários e ler outputs)
+        self.MAKE_API_TOKEN = os.getenv('PERSEVERA_MAKE_API_TOKEN')
+        self.MAKE_API_URL = os.getenv('PERSEVERA_MAKE_API_URL')
 
         # Load XP Hub Advisor Platform configuration
         self.XPHUB_BEARER_TOKEN = os.getenv('PERSEVERA_XPHUB_BEARER_TOKEN')
