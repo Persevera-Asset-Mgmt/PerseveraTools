@@ -28,6 +28,89 @@ _TOKEN_DEFAULT_EXPIRES_SECONDS = 3599
 _TOKEN_REFRESH_MARGIN_SECONDS = 120
 _DEFAULT_PAGE_SIZE = 500
 
+# Posição consolidada D0: cada classe em `posicaoDetalhada` é {nome, itens[], saldo, saldoLiquido, valorAplicado}.
+# Para cada classe, coluna de saída -> campo(s) do item (o primeiro presente e não nulo vence).
+# Conferido em 2026-10-16 contra clientes reais: quantidade × preço = valorBruto e Σ valorBruto = saldo da classe.
+# Tesouro Direto, FII, estruturados e opções flexíveis vêm do cenário Make 4887474 (sem posição real para conferir).
+_POSITION_COLUMNS = [
+    "codigoCliente", "dataReferencia", "classe", "classeNome", "tipo", "codigoAtivo", "nomeAtivo", "emissor",
+    "cnpj", "dataVencimento", "quantidade", "precoUnitario", "valorAplicado", "valorBruto", "valorLiquido",
+    "atualizadoEm",
+]
+_POSITION_FIELD_MAP: Dict[str, Dict[str, Tuple[str, ...]]] = {
+    "acoes": {
+        "tipo": ("nomeTipoAtivo",), "codigoAtivo": ("codigoAtivo",), "nomeAtivo": ("nomeEmpresaEmitente",),
+        "quantidade": ("quantidadeTotalComGarantias",), "precoUnitario": ("precoUnitarioAtual",),
+        "valorBruto": ("valorAtual",), "valorLiquido": ("valorAtual",), "dataReferencia": ("dataPosicao",),
+    },
+    "fundosImobiliarios": {
+        "tipo": ("nomeTipoAtivo",), "codigoAtivo": ("codigoAtivo",), "nomeAtivo": ("nomeEmpresaEmitente",),
+        "quantidade": ("quantidadeTotalAtual",), "precoUnitario": ("precoUnitarioAtual",),
+        "valorBruto": ("valorAtual",), "valorLiquido": ("valorAtual",), "dataReferencia": ("dataPosicao",),
+    },
+    "fundos": {
+        "tipo": ("subgrupo",), "codigoAtivo": ("cnpj",), "nomeAtivo": ("nomeFundo",), "cnpj": ("cnpj",),
+        "quantidade": ("quantidadeCotas",), "precoUnitario": ("valorCota",), "valorAplicado": ("valorAplicado",),
+        "valorBruto": ("valorBruto",), "valorLiquido": ("valorLiquido",), "dataReferencia": ("dataPosicao",),
+    },
+    "rendaFixa": {
+        "tipo": ("categoria",), "codigoAtivo": ("codigoAtivo",), "nomeAtivo": ("nomeAtivo", "nickName"),
+        "emissor": ("nomeEmissor",), "dataVencimento": ("dataVencimento",), "quantidade": ("quantidadeTotal",),
+        "precoUnitario": ("precoUnitario",), "valorAplicado": ("valorAplicado",),
+        "valorBruto": ("valorFinanceiroBruto",), "valorLiquido": ("valorFinanceiroLiquido",),
+        "dataReferencia": ("dataPosicao",),
+    },
+    "tesouroDireto": {
+        "tipo": ("tipo",), "codigoAtivo": ("nomeTitulo",), "nomeAtivo": ("nomeTitulo",),
+        "dataVencimento": ("dataVencimento",), "quantidade": ("quantidadeTotal",), "precoUnitario": ("valorPU",),
+        "valorAplicado": ("valorAplicado",), "valorBruto": ("valorBruto",), "valorLiquido": ("valorLiquido",),
+        "dataReferencia": ("dataPosicao",),
+    },
+    "previdencia": {
+        "tipo": ("tipoPlano",), "codigoAtivo": ("codigoProposta",), "nomeAtivo": ("nomePlanoResumido", "nomePlano"),
+        "emissor": ("nomeSeguradora",), "cnpj": ("cnpj",), "quantidade": ("quantidadeCotas",),
+        "precoUnitario": ("valorUltimaCotas",), "valorAplicado": ("valorAplicado",),
+        "valorBruto": ("valorReservaAcumulada",), "valorLiquido": ("valorReservaAcumulada",),
+        "dataReferencia": ("dataSaldoAtual",),
+    },
+    # Em proventos, precoAtual é o valor bruto total do provento (Σ precoAtual = saldo da classe), não preço por ação.
+    "proventos": {
+        "tipo": ("tipoProvento",), "codigoAtivo": ("codigoAtivo",), "nomeAtivo": ("codigoAtivo",),
+        "quantidade": ("quantidadeProvisionada",), "valorBruto": ("precoAtual",),
+        "valorLiquido": ("valorLiquidoAtual",), "dataReferencia": ("dataPosicao",),
+    },
+    "produtosEstruturados": {
+        "tipo": ("tipoEstrutura",), "codigoAtivo": ("ativo",), "nomeAtivo": ("nomeEstrutura",),
+        "dataVencimento": ("dataEncerramento",), "quantidade": ("quantidade",), "valorAplicado": ("custo",),
+        "dataReferencia": ("dataPosicao",),
+    },
+    "opcoesFlexiveis": {
+        "tipo": ("siglaMercado",), "codigoAtivo": ("codigoInstrumento", "numeroContrato"),
+        "nomeAtivo": ("descricaoMercadoria",), "dataVencimento": ("dataVencimento",),
+        "quantidade": ("quantidadeTotalAbertura",), "precoUnitario": ("precoUnitarioAbertura",),
+        "dataReferencia": ("dataPosicao",),
+    },
+}
+_POSITION_FIELD_MAP["coe"] = _POSITION_FIELD_MAP["rendaFixa"]
+_POSITION_FIELD_MAP["rendaFixaGarantia"] = _POSITION_FIELD_MAP["rendaFixa"]
+_POSITION_FIELD_MAP["proventosFundoImobiliario"] = _POSITION_FIELD_MAP["proventos"]
+# Classes sem mapeamento conferido (opções, termos, BMF, clubes, compromissadas...).
+_POSITION_FALLBACK_MAP: Dict[str, Tuple[str, ...]] = {
+    "tipo": ("nomeTipoAtivo", "categoria", "tipo"),
+    "codigoAtivo": ("codigoAtivo", "ativo", "codigoInstrumento", "cnpj"),
+    "nomeAtivo": ("nomeAtivo", "nomeEmpresaEmitente", "nomeFundo", "nome"),
+    "emissor": ("nomeEmissor",),
+    "cnpj": ("cnpj",),
+    "dataVencimento": ("dataVencimento",),
+    "quantidade": ("quantidadeTotal", "quantidadeTotalAbertura", "quantidade", "quantidadeCotas"),
+    "precoUnitario": ("precoUnitarioAtual", "precoUnitario", "valorCota"),
+    "valorAplicado": ("valorAplicado",),
+    "valorBruto": ("valorAtual", "valorBruto", "valorFinanceiroBruto", "valorLiquidoAtual"),
+    "valorLiquido": ("valorLiquido", "valorFinanceiroLiquido", "valorAtual", "valorLiquidoAtual"),
+    "dataReferencia": ("dataPosicao",),
+}
+_POSITION_DATE_COLUMNS = ("dataReferencia", "dataVencimento")
+
 
 def _jwt_expiry_epoch(token: str) -> Optional[float]:
     """Lê o claim `exp` do JWT sem validar assinatura (só para saber quando renovar)."""
@@ -37,6 +120,13 @@ def _jwt_expiry_epoch(token: str) -> Optional[float]:
         return float(json.loads(base64.urlsafe_b64decode(payload))["exp"])
     except (IndexError, KeyError, ValueError, TypeError):
         return None
+
+
+def _position_date(value: Any) -> Optional[str]:
+    """'2026-10-16T00:00:00-03:00' → '2026-10-16' (data local, sem converter fuso); '0001-01-01...' → None."""
+    if not isinstance(value, str) or len(value) < 10 or value.startswith("0001-01-01"):
+        return None
+    return value[:10]
 
 
 class XPWSProvider(DataProvider):
@@ -66,7 +156,9 @@ class XPWSProvider(DataProvider):
       - account: Dados da Conta, GET /v1/account (OData, validity history per account)
       - customers: Contas habilitadas, GET /v2/customers
       - consolidated_position_d0: Posição consolidada D0,
-        GET /v1/consolidated-positions/customer/{customer_code}
+        GET /v1/consolidated-positions/customer/{customer_code} (JSON achatado em 1 linha)
+      - consolidated_positions_d0: mesma posição em formato longo, uma linha por ativo, para vários
+        clientes (``customer_codes``; sem eles, as contas HABILITADO). Ver ``get_consolidated_positions_d0``.
 
     ``params`` go to the query string (OData options such as $filter, $select, $top). Collection
     endpoints answer ``{"data": [...], "count": N}`` with ``$count=true``; with ``paginate=True``
@@ -121,6 +213,7 @@ class XPWSProvider(DataProvider):
           provider.get_data("account", params={"$filter": "currentRegisterIndicator eq 1"})
           provider.get_data("customers")
           provider.get_data("consolidated_position_d0", customer_code=64280)
+          provider.get_data("consolidated_positions_d0", customer_codes=[64280, 12345])
         """
         self._log_processing(category)
         params = kwargs.get("params")
@@ -139,6 +232,12 @@ class XPWSProvider(DataProvider):
             if not cust:
                 raise DataRetrievalError("consolidated_position_d0 requires 'customer_code'.")
             return self.get_consolidated_position_d0(cust, params=params)
+        if category == "consolidated_positions_d0":
+            return self.get_consolidated_positions_d0(
+                kwargs.get("customer_codes"),
+                include_cash=kwargs.get("include_cash", True),
+                include_raw=kwargs.get("include_raw", False),
+            )
 
         raise DataRetrievalError(f"Unsupported category '{category}' for XPWSProvider.")
 
@@ -156,6 +255,96 @@ class XPWSProvider(DataProvider):
     ) -> pd.DataFrame:
         """Posição consolidada D0 de um cliente."""
         return self._to_dataframe(self.get_json(f"/v1/consolidated-positions/customer/{customer_code}", params))
+
+    def get_consolidated_positions_d0(
+        self,
+        customer_codes: Optional[Union[str, int, List[Union[str, int]]]] = None,
+        *,
+        include_cash: bool = True,
+        include_raw: bool = False,
+    ) -> pd.DataFrame:
+        """
+        Posição consolidada D0 em formato longo: uma linha por ativo/posição.
+
+        Colunas: codigoCliente, dataReferencia, classe (chave da XP: acoes, fundos, rendaFixa...), classeNome,
+        tipo (CDB/CRA/NTN-B, subgrupo do fundo, PGBL/VGBL...), codigoAtivo, nomeAtivo, emissor, cnpj,
+        dataVencimento, quantidade, precoUnitario, valorAplicado, valorBruto, valorLiquido, atualizadoEm.
+        Com ``include_cash``, cada cliente ganha uma linha ``classe='caixa'`` (financeiro.valorDisponivel), de modo
+        que Σ valorBruto = patrimonioTotal. ``include_raw`` acrescenta os campos originais dos itens.
+
+        Sem ``customer_codes``, usa as contas com status HABILITADO em ``get_customers()``.
+        Cada cliente é uma execução do cenário proxy no Make.
+        """
+        if customer_codes is None:
+            customers = self.get_customers()
+            if customers.empty:
+                return pd.DataFrame(columns=_POSITION_COLUMNS)
+            customer_codes = customers.loc[customers["status"] == "HABILITADO", "customerCode"].tolist()
+        elif isinstance(customer_codes, (str, int)):
+            customer_codes = [customer_codes]
+
+        rows: List[Dict[str, Any]] = []
+        for i, code in enumerate(customer_codes, 1):
+            logger.info("XPWS posição consolidada D0: cliente %s (%d/%d)", code, i, len(customer_codes))
+            payload = self.get_json(f"/v1/consolidated-positions/customer/{code}")
+            rows.extend(self._explode_consolidated_position(payload, code, include_cash=include_cash,
+                                                            include_raw=include_raw))
+
+        df = pd.DataFrame(rows)
+        for col in _POSITION_COLUMNS:
+            if col not in df.columns:
+                df[col] = None
+        df = df[_POSITION_COLUMNS + [c for c in df.columns if c not in _POSITION_COLUMNS]]
+        for col in _POSITION_DATE_COLUMNS:
+            df[col] = pd.to_datetime(df[col].map(_position_date), errors="coerce")
+        df["atualizadoEm"] = pd.to_datetime(df["atualizadoEm"], errors="coerce", utc=True)
+        # codigoProposta (previdência) é inteiro; o resto é texto.
+        df["codigoAtivo"] = df["codigoAtivo"].map(lambda v: v if v is None or isinstance(v, str) else str(v))
+        return df
+
+    @staticmethod
+    def _explode_consolidated_position(
+        payload: Any, customer_code: Union[str, int], *, include_cash: bool = True, include_raw: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Uma linha por item de cada classe de `posicaoDetalhada` (+ caixa). Payload vazio → nenhuma linha."""
+        if not isinstance(payload, dict) or not isinstance(payload.get("posicaoDetalhada"), dict):
+            return []
+        pos = payload["posicaoDetalhada"]
+        client = payload.get("codigoCliente", customer_code)
+        updated = pos.get("dataAtualizacao") or payload.get("atualizeEm")
+
+        rows: List[Dict[str, Any]] = []
+        for classe, node in pos.items():
+            if not isinstance(node, dict) or not isinstance(node.get("itens"), list) or not node["itens"]:
+                continue
+            fmap = _POSITION_FIELD_MAP.get(classe)
+            if fmap is None:
+                logger.warning("XPWS: classe '%s' sem mapeamento conferido; usando campos genéricos.", classe)
+                fmap = _POSITION_FALLBACK_MAP
+            for item in node["itens"]:
+                if not isinstance(item, dict):
+                    continue
+                row: Dict[str, Any] = {
+                    "codigoCliente": item.get("codigoCliente", client),
+                    "classe": classe,
+                    "classeNome": node.get("nome"),
+                    "atualizadoEm": updated,
+                }
+                for col, fields in fmap.items():
+                    row[col] = next((item[f] for f in fields if item.get(f) is not None), None)
+                if include_raw:
+                    row.update({k: v for k, v in item.items() if k not in row})
+                rows.append(row)
+
+        fin = pos.get("financeiro")
+        if include_cash and isinstance(fin, dict):
+            cash = fin.get("valorDisponivel", pos.get("valorDisponivel"))
+            rows.append({
+                "codigoCliente": fin.get("codigoCliente", client), "classe": "caixa", "classeNome": "Saldo disponível",
+                "codigoAtivo": "CAIXA", "nomeAtivo": "Saldo disponível", "dataReferencia": fin.get("dataPosicaoD0"),
+                "valorBruto": cash, "valorLiquido": cash, "atualizadoEm": updated,
+            })
+        return rows
 
     def get_json(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """Resposta JSON crua de um endpoint (sem paginação nem conversão)."""
