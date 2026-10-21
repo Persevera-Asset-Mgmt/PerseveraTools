@@ -107,27 +107,212 @@ def _trim_mask(values: pd.DataFrame, trim: float) -> pd.DataFrame:
     return ranks.gt(k, axis=0) & ranks.le(n - k, axis=0)
 
 
+# --------------------------------------------------------------------------- #
+# Pure building blocks (no database access)
+#
+# The functions below only transform DataFrames, so callers that read the data
+# on their own (e.g. a web backend with its own read-only connection) get the
+# exact same numbers as the pipeline. ``calculate_spread`` /
+# ``calculate_duration_stats`` are the database-backed wrappers around them.
+# --------------------------------------------------------------------------- #
+
+def outstanding_volume(
+    par: pd.DataFrame,
+    emissions: pd.DataFrame,
+    like: pd.DataFrame,
+) -> pd.DataFrame:
+    """Outstanding volume proxy per (date, code): ANBIMA ``par_value`` x issued quantity.
+
+    ``par_value`` (PU par) reflects amortizations; it only exists from 2021-04.
+    Before that, or for codes without it, the nominal value at issuance is used.
+    Codes absent from ``emissions`` (e.g. CRI/CRA) get NaN volume.
+
+    Args:
+        par: Wide (date × code) ``par_value`` panel; may be empty.
+        emissions: Rows of ``credito_privado_emissoes`` (``code``,
+            ``valor_nominal_na_emissao``, ``quantidade_emitida``).
+        like: Panel whose index and columns the result follows.
+    """
+    par = par.reindex(index=like.index, columns=like.columns).ffill()
+    emis = emissions.drop_duplicates('code').set_index('code')
+    par = par.fillna(emis['valor_nominal_na_emissao'].reindex(like.columns))
+    return par * emis['quantidade_emitida'].reindex(like.columns)
+
+
+def spread_di_panel(ytm: pd.DataFrame) -> pd.DataFrame:
+    """Spread per (date, code) of "DI + spread" assets: the ANBIMA indicative rate itself.
+
+    Only gaps between two quotes are filled (up to 5 dates); no extrapolation
+    after the last one.
+    """
+    return ytm.interpolate(limit=5, limit_area='inside')
+
+
+def references_wide(references: pd.DataFrame, index: pd.Index) -> pd.DataFrame:
+    """Benchmark NTN-B maturity per (date, code), aligned to ``index``.
+
+    ``references`` is long (``date``, ``code``, ``reference``), as in
+    ``credito_privado_referencia``. A missing day reuses the code's previous
+    reference for up to ``REFERENCE_FFILL_LIMIT`` dates. No back-fill: it would
+    use a benchmark chosen later.
+    """
+    ref = (
+        references.dropna(subset=['reference'])
+        .sort_values(['code', 'date'])
+        .drop_duplicates(subset=['date', 'code'], keep='last')
+        .pivot(index='date', columns='code', values='reference')
+    )
+    return (
+        ref.reindex(index=ref.index.union(index))
+        .ffill(limit=REFERENCE_FFILL_LIMIT)
+        .reindex(index=index)
+    )
+
+
+def ntnb_curve_wide(titulos_publicos: pd.DataFrame) -> pd.DataFrame:
+    """NTN-B yields as a (date × maturity) lookup table.
+
+    ``titulos_publicos`` is what ``get_series(code='NTN-B', category='titulos_publicos')``
+    returns (``date``, ``maturity``, ``value`` and optionally ``source``); ANBIMA is
+    preferred when several sources exist.
+    """
+    tp = titulos_publicos
+    if isinstance(tp.index, pd.MultiIndex):
+        tp = tp.reset_index()
+    elif getattr(tp.index, "name", None) in ['date', 'maturity']:
+        tp = tp.reset_index()
+    if 'source' in tp.columns:
+        if 'anbima' in tp['source'].unique().tolist():
+            tp = tp[tp['source'] == 'anbima']
+        tp = tp.drop(columns=['source'])
+    return (
+        tp.drop_duplicates(subset=['date', 'maturity'])
+        .pivot(index='date', columns='maturity', values='value')
+    )
+
+
+def spread_ipca_panel(
+    ytm: pd.DataFrame,
+    references: pd.DataFrame,
+    ntnb_curve: pd.DataFrame,
+) -> pd.DataFrame:
+    """Spread per (date, code) of IPCA-linked assets: indicative rate minus the NTN-B yield
+    at the asset's benchmark maturity on the same date.
+
+    Args:
+        ytm: Wide (date × code) indicative rates; zeros are treated as missing.
+        references: Long benchmark references (``date``, ``code``, ``reference``).
+            Assets without a reference are left out (logged).
+        ntnb_curve: NTN-B yields as returned by ``ntnb_curve_wide``.
+    """
+    series_wide = ytm.mask(ytm == 0.).interpolate(limit=5, limit_area='inside')
+    ref_wide = references_wide(references, series_wide.index)
+    sem_ref = series_wide.notna() & ref_wide.reindex(columns=series_wide.columns).isna()
+    if sem_ref.any().any():
+        logger.warning(
+            "Spread IPCA: %d pares (debenture, dia) com taxa e sem referencia NTN-B ficaram "
+            "de fora (%.1f%% das observacoes, %d debentures)",
+            int(sem_ref.sum().sum()),
+            100 * sem_ref.sum().sum() / series_wide.notna().sum().sum(),
+            int(sem_ref.any().sum()),
+        )
+
+    # Vectorised NTN-B lookup: for each (date, code) pair fetch the yield at
+    # the code's benchmark maturity using a stacked-index reindex — no long-format
+    # merge needed.
+    # Levels by position (0 = date, -1 = code): the index may be unnamed when the
+    # caller builds the panels itself.
+    ntnb_stacked = ntnb_curve.stack()
+    ref_long = ref_wide.stack().rename('reference')
+    lookup_idx = pd.MultiIndex.from_arrays(
+        [ref_long.index.get_level_values(0), ref_long.to_numpy()]
+    )
+    ytm_ntnb_wide = (
+        pd.Series(ntnb_stacked.reindex(lookup_idx).to_numpy(), index=ref_long.index)
+        .unstack(-1)
+    )
+
+    sem_ntnb = ytm_ntnb_wide.reindex_like(series_wide).isna() & ref_wide.reindex(columns=series_wide.columns).notna() & series_wide.notna()
+    if sem_ntnb.any().any():
+        logger.warning(
+            "Spread IPCA: %d pares (debenture, dia) com referencia sem taxa da NTN-B correspondente ficaram de fora",
+            int(sem_ntnb.sum().sum()),
+        )
+
+    # Spread: single wide-format subtraction, then interpolate gaps.
+    return (series_wide - ytm_ntnb_wide).interpolate(limit=5, limit_area='inside')
+
+
+# --------------------------------------------------------------------------- #
+# Database-backed wrappers
+# --------------------------------------------------------------------------- #
+
 def _outstanding_volume(
     series: pd.DataFrame,
     emissions: pd.DataFrame,
     start_date,
     end_date,
 ) -> pd.DataFrame:
-    """Outstanding volume proxy per (date, code): ANBIMA ``par_value`` x issued quantity.
-
-    ``par_value`` (PU par) reflects amortizations; it only exists from 2021-04.
-    Before that, or for codes without it, the nominal value at issuance is used.
-    """
+    """``outstanding_volume`` with ``par_value`` read from the database."""
     codes = list(series.columns)
     try:
         par = get_series(code=codes, source='anbima', category='credito_privado_di',
                          start_date=start_date, end_date=end_date, field='par_value')
     except ValueError:
         par = pd.DataFrame()
-    par = par.reindex(index=series.index, columns=series.columns).ffill()
-    emis = emissions.drop_duplicates('code').set_index('code')
-    par = par.fillna(emis['valor_nominal_na_emissao'].reindex(series.columns))
-    return par * emis['quantidade_emitida'].reindex(series.columns)
+    return outstanding_volume(par, emissions, series)
+
+
+def _restrict_codes(universe: List[str], codes: Optional[List[str]]) -> List[str]:
+    """Universe intersected with ``codes`` (order of the universe); all of it when None."""
+    if codes is None:
+        return universe
+    pedidos = {str(c).strip().upper() for c in codes}
+    return [c for c in universe if str(c).strip().upper() in pedidos]
+
+
+def _spread_panel(
+    index_code: str,
+    codes: List[str],
+    start_date,
+    end_date,
+    field: Union[str, List[str]],
+) -> pd.DataFrame:
+    """Read the inputs for ``codes`` and build the per-asset spread panel."""
+    if index_code == 'DI':
+        return spread_di_panel(_get_wide_series(codes, index_code, field, start_date, end_date))
+    if index_code == 'IPCA':
+        ytm = _get_wide_series(codes, index_code, field, start_date, end_date)
+        ref_start = (pd.Timestamp(start_date) - pd.Timedelta(days=15)) if start_date is not None else None
+        references = get_references(code=codes, start_date=ref_start, end_date=end_date)
+        titulos = get_series(code='NTN-B', category='titulos_publicos', start_date=start_date, end_date=end_date, field=field)
+        return spread_ipca_panel(ytm, references, ntnb_curve_wide(titulos))
+    raise ValueError("Invalid index code")
+
+
+def calculate_spread_panel(
+    index_code: str,
+    start_date: Optional[Union[str, datetime, pd.Timestamp]] = None,
+    end_date: Optional[Union[str, datetime, pd.Timestamp]] = None,
+    field: Union[str, List[str]] = 'yield_to_maturity',
+    deb_incent_lei_12431: Optional[bool] = None,
+    codes: Optional[List[str]] = None) -> pd.DataFrame:
+    """Per-asset spread panel (date × code) used by ``calculate_spread``.
+
+    Same universe as ``calculate_spread`` (debentures in ``credito_privado_emissoes``
+    for ``index_code``; DI only at 100% of CDI), optionally restricted to ``codes``.
+    Zeros are not masked here; ``cross_section_stats`` does it.
+
+    Args:
+        index_code: 'DI' or 'IPCA'.
+        start_date, end_date: Optional date filters.
+        field: Field to read (default: 'yield_to_maturity').
+        deb_incent_lei_12431: Whether to filter emissions under Lei 12431.
+        codes: Optional subset of codes (case-insensitive); None keeps the whole universe.
+    """
+    emissions = get_emissions(index_code=index_code, deb_incent_lei_12431=deb_incent_lei_12431)
+    universe = _restrict_codes(_select_codes(emissions, index_code), codes)
+    return _spread_panel(index_code, universe, start_date, end_date, field)
 
 
 def calculate_spread(
@@ -137,7 +322,8 @@ def calculate_spread(
     field: Union[str, List[str]] = 'yield_to_maturity',
     calculate_distribution: bool = False,
     deb_incent_lei_12431: Optional[bool] = None,
-    trim: float = DEFAULT_SPREAD_TRIM) -> pd.DataFrame:
+    trim: float = DEFAULT_SPREAD_TRIM,
+    codes: Optional[List[str]] = None) -> pd.DataFrame:
     """Calculate the spread for a given index code.
 
     - DI: ANBIMA indicative rate of "DI + spread" debentures (already a spread).
@@ -157,91 +343,16 @@ def calculate_spread(
         calculate_distribution: Whether to calculate the distribution of the spread.
         deb_incent_lei_12431: Whether to filter emissions under Lei 12431 (default: None).
         trim: Fraction dropped at each tail for ``mean`` / ``weighted_mean`` (default 10%).
+        codes: Optional subset of the universe (e.g. one issuer's debentures);
+            None keeps the whole universe.
     Returns:
         DataFrame with spread data, indexed by 'date'.
     Raises:
         ValueError: If index_code is not 'DI' or 'IPCA'.
     """
     emissions = get_emissions(index_code=index_code, deb_incent_lei_12431=deb_incent_lei_12431)
-    codes = _select_codes(emissions, index_code)
-
-    if index_code == 'DI':
-        # Only fill gaps between two quotes: no extrapolation after the last one.
-        series = _get_wide_series(codes, index_code, field, start_date, end_date).interpolate(limit=5, limit_area='inside')
-    elif index_code == 'IPCA':
-        series_wide = _get_wide_series(codes, index_code, field, start_date, end_date)
-        series_wide = series_wide.mask(series_wide == 0.).interpolate(limit=5, limit_area='inside')
-
-        # References: pivot to wide (date × code → reference maturity) so that the
-        # NTN-B lookup can be done with a single vectorised reindex instead of two
-        # long-format merges. ANBIMA publishes one per (code, date) since 2017-06;
-        # a missing day reuses the code's previous reference for up to
-        # REFERENCE_FFILL_LIMIT dates. No back-fill: it would use a benchmark
-        # chosen later. Debentures without a reference are left out (logged).
-        ref_start = (pd.Timestamp(start_date) - pd.Timedelta(days=15)) if start_date is not None else None
-        references = get_references(code=codes, start_date=ref_start, end_date=end_date)
-        ref_wide = (
-            references.dropna(subset=['reference'])
-            .sort_values(['code', 'date'])
-            .drop_duplicates(subset=['date', 'code'], keep='last')
-            .pivot(index='date', columns='code', values='reference')
-        )
-        ref_wide = (
-            ref_wide.reindex(index=ref_wide.index.union(series_wide.index))
-            .ffill(limit=REFERENCE_FFILL_LIMIT)
-            .reindex(index=series_wide.index)
-        )
-        sem_ref = series_wide.notna() & ref_wide.reindex(columns=series_wide.columns).isna()
-        if sem_ref.any().any():
-            logger.warning(
-                "Spread IPCA: %d pares (debenture, dia) com taxa e sem referencia NTN-B ficaram "
-                "de fora (%.1f%% das observacoes, %d debentures)",
-                int(sem_ref.sum().sum()),
-                100 * sem_ref.sum().sum() / series_wide.notna().sum().sum(),
-                int(sem_ref.any().sum()),
-            )
-
-        # NTN-B yields: pivot to (date × maturity) lookup table.
-        series_titulos_publicos = get_series(code='NTN-B', category='titulos_publicos', start_date=start_date, end_date=end_date, field=field)
-        if isinstance(series_titulos_publicos.index, pd.MultiIndex):
-            series_titulos_publicos = series_titulos_publicos.reset_index()
-        elif getattr(series_titulos_publicos.index, "name", None) in ['date', 'maturity']:
-            series_titulos_publicos = series_titulos_publicos.reset_index()
-        if 'source' in series_titulos_publicos.columns:
-            unique_sources = series_titulos_publicos['source'].unique().tolist()
-            if 'anbima' in unique_sources:
-                series_titulos_publicos = series_titulos_publicos[series_titulos_publicos['source'] == 'anbima']
-            series_titulos_publicos = series_titulos_publicos.drop(columns=['source'])
-        ntnb_wide = (
-            series_titulos_publicos.drop_duplicates(subset=['date', 'maturity'])
-            .pivot(index='date', columns='maturity', values='value')
-        )
-
-        # Vectorised NTN-B lookup: for each (date, code) pair fetch the yield at
-        # the code's benchmark maturity using a stacked-index reindex — no long-format
-        # merge needed.
-        ntnb_stacked = ntnb_wide.stack()
-        ref_long = ref_wide.stack().rename('reference')
-        lookup_idx = pd.MultiIndex.from_arrays(
-            [ref_long.index.get_level_values('date'), ref_long.to_numpy()]
-        )
-        ytm_ntnb_wide = (
-            pd.Series(ntnb_stacked.reindex(lookup_idx).to_numpy(), index=ref_long.index)
-            .unstack('code')
-        )
-
-        sem_ntnb = ytm_ntnb_wide.reindex_like(series_wide).isna() & ref_wide.reindex(columns=series_wide.columns).notna() & series_wide.notna()
-        if sem_ntnb.any().any():
-            logger.warning(
-                "Spread IPCA: %d pares (debenture, dia) com referencia sem taxa da NTN-B correspondente ficaram de fora",
-                int(sem_ntnb.sum().sum()),
-            )
-
-        # Spread: single wide-format subtraction, then interpolate gaps.
-        series = (series_wide - ytm_ntnb_wide).interpolate(limit=5, limit_area='inside')
-    else:
-        raise ValueError("Invalid index code")
-
+    universe = _restrict_codes(_select_codes(emissions, index_code), codes)
+    series = _spread_panel(index_code, universe, start_date, end_date, field)
     return _cross_section_stats(series, emissions, start_date, end_date, trim, calculate_distribution, SPREAD_BUCKETS)
 
 
@@ -251,7 +362,8 @@ def calculate_duration_stats(
     end_date: Optional[Union[str, datetime, pd.Timestamp]] = None,
     calculate_distribution: bool = False,
     deb_incent_lei_12431: Optional[bool] = None,
-    trim: float = DEFAULT_SPREAD_TRIM) -> pd.DataFrame:
+    trim: float = DEFAULT_SPREAD_TRIM,
+    codes: Optional[List[str]] = None) -> pd.DataFrame:
     """Calculate cross-sectional duration statistics for a given index code.
 
     Same universe and aggregation as ``calculate_spread`` (trimmed ``mean`` /
@@ -265,15 +377,16 @@ def calculate_duration_stats(
         calculate_distribution: Whether to calculate the distribution of the duration.
         deb_incent_lei_12431: Whether to filter emissions under Lei 12431 (default: None).
         trim: Fraction dropped at each tail for ``mean`` / ``weighted_mean`` (default 10%).
+        codes: Optional subset of the universe; None keeps the whole universe.
     Returns:
         DataFrame with duration statistics in years, indexed by 'date'.
     Raises:
         ValueError: If index_code is not 'DI' or 'IPCA'.
     """
     emissions = get_emissions(index_code=index_code, deb_incent_lei_12431=deb_incent_lei_12431)
-    codes = _select_codes(emissions, index_code)
+    universe = _restrict_codes(_select_codes(emissions, index_code), codes)
 
-    series = _get_wide_series(codes, index_code, 'duration', start_date, end_date)
+    series = _get_wide_series(universe, index_code, 'duration', start_date, end_date)
     series = series.mask(series == 0.).interpolate(limit=5, limit_area='inside') / 252
 
     return _cross_section_stats(series, emissions, start_date, end_date, trim, calculate_distribution, DURATION_BUCKETS)
@@ -346,17 +459,44 @@ def _cross_section_stats(
     trim: float,
     calculate_distribution: bool,
     buckets: tuple) -> pd.DataFrame:
-    """Daily cross-sectional statistics of a wide (date × code) panel.
-
-    ``median`` and the distribution counts use every asset; ``mean`` and
-    ``weighted_mean`` are trimmed (``_trim_mask``). Weights are outstanding
-    volume (``_outstanding_volume``).
-    """
+    """``cross_section_stats`` over the debentures in ``emissions``, with the
+    outstanding volume read from the database (``_outstanding_volume``)."""
     emissions = emissions[emissions['code'].isin(series.columns)]
     series = series[[c for c in series.columns if c in set(emissions['code'])]]
     series = series.mask(series == 0.)
+    volume = _outstanding_volume(series, emissions, start_date, end_date)
+    return cross_section_stats(series, volume, trim, calculate_distribution, buckets)
 
-    volume_df = _outstanding_volume(series, emissions, start_date, end_date).where(series.notna())
+
+def cross_section_stats(
+    series: pd.DataFrame,
+    volume: Optional[pd.DataFrame] = None,
+    trim: float = DEFAULT_SPREAD_TRIM,
+    calculate_distribution: bool = False,
+    buckets: tuple = SPREAD_BUCKETS) -> pd.DataFrame:
+    """Daily cross-sectional statistics of a wide (date × code) panel.
+
+    ``median`` and the distribution counts use every asset; ``mean`` and
+    ``weighted_mean`` are trimmed (``_trim_mask``: with fewer than
+    ``1 / trim`` assets nothing is dropped). Zeros are treated as missing.
+
+    ``weighted_mean`` and the volume columns weight by ``volume`` (same shape as
+    ``series``, e.g. ``outstanding_volume``). Assets without volume count in
+    ``median``/``mean`` but not in the weighted figures; without any volume they
+    are NaN (``weighted_mean``) or 0 (volume columns).
+
+    Args:
+        series: Wide (date × code) panel (spreads in % p.a. or durations in years).
+        volume: Optional wide (date × code) weights; None means no weights.
+        trim: Fraction dropped at each tail for ``mean`` / ``weighted_mean``.
+        calculate_distribution: Whether to add the above/below-mean and bucket counts.
+        buckets: (name, lower inclusive, upper exclusive) tuples, e.g.
+            ``SPREAD_BUCKETS`` or ``DURATION_BUCKETS``.
+    """
+    series = series.mask(series == 0.)
+    if volume is None:
+        volume = pd.DataFrame(np.nan, index=series.index, columns=series.columns)
+    volume_df = volume.reindex(index=series.index, columns=series.columns).where(series.notna())
     kept = _trim_mask(series, trim)
     series_kept = series.where(kept)
     volume_kept = volume_df.where(kept)

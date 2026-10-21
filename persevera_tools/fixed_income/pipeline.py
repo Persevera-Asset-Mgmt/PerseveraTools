@@ -26,6 +26,14 @@ SPREAD_SERIES: tuple[Mapping[str, Any], ...] = (
         "deb_incent_lei_12431": True,
         "calculate_distribution": True,
     },
+    # Debêntures IPCA não incentivadas: mesmo cálculo, série separada das incentivadas
+    # (referência de mercado da página Spreads por Emissor do PerseveraHub).
+    {
+        "code": "persevera_anbima_debentures_spread_ipca_nao_incent",
+        "index_code": "IPCA",
+        "deb_incent_lei_12431": False,
+        "calculate_distribution": True,
+    },
 )
 
 DURATION_SERIES: tuple[Mapping[str, Any], ...] = (
