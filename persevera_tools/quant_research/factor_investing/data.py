@@ -140,8 +140,11 @@ def load_backtest_panels(
     lookback_start = config.start_date - pd.Timedelta(days=365)
 
     component_fields = list(dict.fromkeys(list(components)))
+    beta_fields = [config.beta_field] if config.beta_neutral else []
     all_fields = list(
-        dict.fromkeys(component_fields + [config.adtv_field, config.price_field])
+        dict.fromkeys(
+            component_fields + [config.adtv_field, config.price_field] + beta_fields
+        )
     )
 
     full = load_factor_panel(
@@ -163,6 +166,7 @@ def load_backtest_panels(
         "components": _subset(component_fields),
         "adtv": _subset([config.adtv_field]),
         "prices": _subset([config.price_field]),
+        "beta": _subset(beta_fields),
     }
 
 

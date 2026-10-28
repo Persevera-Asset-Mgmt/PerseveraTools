@@ -19,7 +19,7 @@ from .definitions import (
     load_factor_definitions,
     resolve_component_names,
 )
-from .portfolio import scores_to_weights
+from .portfolio import beta_neutralize, scores_to_weights
 from .result import (
     BacktestDiagnostics,
     BacktestResult,
@@ -155,6 +155,7 @@ def _rebal_row(
         "traded_notional": traded,
         "trading_cost": traded * float(payload.get("trading_cost_bps", 0.0)) / 10_000.0,
     }
+    row.update(payload.get("beta_info") or {})
     cross_u = cross.reindex(universe)
     for comp in components:
         key = f"cov__{comp}"
@@ -209,12 +210,15 @@ def _form_rebalance_books(
     prices: pd.DataFrame,
     components: tuple[str, ...],
     higher_is_better: Mapping[str, bool],
+    beta_panel: Optional[pd.DataFrame] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
     """Form scores/weights and collect rebalance diagnostics + drop events.
 
     A name is investable only if it still has a price inside ``price_ffill_limit``
     and its ADTV print is inside that same limit and at least ``adtv_min``.
-    Factor values may be older than that window.
+    Factor values may be older than that window. With ``config.beta_neutral``
+    the legs are resized with betas from ``beta_panel`` (no age limit, like
+    factor values).
     """
     score_rows: list[pd.Series] = []
     weight_rows: list[pd.Series] = []
@@ -272,6 +276,27 @@ def _form_rebalance_books(
         if weights.empty:
             continue
 
+        beta_info: Optional[dict[str, float]] = None
+        if config.beta_neutral:
+            betas = snapshot_series(
+                beta_panel if beta_panel is not None else pd.DataFrame(),
+                dt,
+                config.beta_field,
+            ).reindex(scores.index)
+            weights, beta_info = beta_neutralize(weights, betas)
+            if not (beta_info["beta_long"] > 0 and beta_info["beta_short"] > 0):
+                event_rows.append(
+                    {
+                        "date": dt,
+                        "code": "",
+                        "event": "beta_neutral_skipped",
+                        "detail": (
+                            f"leg betas long={beta_info['beta_long']:.3f} "
+                            f"short={beta_info['beta_short']:.3f}; kept dollar-neutral"
+                        ),
+                    }
+                )
+
         rebal_rows.append(
             _rebal_row(
                 dt,
@@ -284,6 +309,7 @@ def _form_rebalance_books(
                     "prev_weights": prev_weights,
                     "trading_cost_bps": config.trading_cost_bps,
                     "n_dropped_share_class": n_dropped_share_class,
+                    "beta_info": beta_info,
                 },
             )
         )
@@ -483,6 +509,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         prices=prices,
         components=components,
         higher_is_better=higher_is_better,
+        beta_panel=panels.get("beta"),
     )
     nav, strategy_returns, costs_df, hold_events, n_days_holdings, n_days_renorm = (
         _simulate_holdings_pnl(
@@ -522,6 +549,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             "one_class_per_issuer": config.one_class_per_issuer,
             "trading_cost_bps": config.trading_cost_bps,
             "borrow_rate": config.borrow_rate,
+            "beta_neutral": config.beta_neutral,
         }
     )
     summary.update(diag_summary)
