@@ -107,10 +107,7 @@ class InvestingComProvider(DataProvider):
                         previous = cells[6].get_text(strip=True) or None
                         
                         event_datetime = row.get('data-event-datetime', '')
-                        # event_attr_id identifies the event type (e.g. 829 = Manufacturing PMI, every month);
-                        # the row id (eventRowId_559178) identifies this occurrence and survives reschedules
                         event_id = row.get('event_attr_id', '')
-                        occurrence_id = row.get('id', '').removeprefix('eventRowId_')
 
                         country = self._get_country(cells[1], currency)
 
@@ -118,8 +115,7 @@ class InvestingComProvider(DataProvider):
                             'date_header': current_date, 'time': time, 'datetime': event_datetime,
                             'country': country, 'currency': currency, 'volatility': volatility,
                             'event_name': event_name, 'actual': actual, 'forecast': forecast,
-                            'previous': previous, 'occurrence_id': occurrence_id, 'event_id': event_id,
-                            'event_url': event_url
+                            'previous': previous, 'event_id': event_id, 'event_url': event_url
                         })
                         
                 except Exception as e:
@@ -147,9 +143,8 @@ class InvestingComProvider(DataProvider):
             current_tab (str, optional): Data tab. Defaults to 'nextWeek'.
             
         Returns:
-            pd.DataFrame: DataFrame with columns: ['date', 'occurrence_id', 'event_id', 'country', 'currency',
-                'event_name', 'importance', 'event_url']. 'date' is in Brasília time (timeZone 12);
-                'occurrence_id' is unique per release, 'event_id' is the recurring event type.
+            pd.DataFrame: DataFrame with columns: ['date', 'event_id', 'country', 'currency', 'event_name',
+                'importance', 'event_url']. 'date' is in Brasília time (timeZone 12).
         """
         self._log_processing(category)
         if data_type != 'economic_calendar':
@@ -168,7 +163,7 @@ class InvestingComProvider(DataProvider):
             self.logger.warning("No events found after parsing.")
             return pd.DataFrame()
 
-        df = df[['datetime_parsed', 'occurrence_id', 'event_id','country', 'currency', 'event_name', 'volatility', 'event_url']]
+        df = df[['datetime_parsed', 'event_id', 'country', 'currency', 'event_name', 'volatility', 'event_url']]
         df = df.rename(columns={'datetime_parsed': 'date', 'volatility': 'importance'})
         
         return df
