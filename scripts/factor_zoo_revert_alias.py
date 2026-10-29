@@ -48,8 +48,10 @@ _RESTORE = """
 INSERT INTO {table} (code, date, field, value)
 SELECT code, date, field, value FROM factor_zoo_removed
 WHERE code = :old AND reason = :reason AND from_table = '{table}'
-ON CONFLICT (code, date, field) DO NOTHING
+ON CONFLICT ({keys}) DO NOTHING
 """
+# factor_zoo_latest keeps one row per (code, field).
+_KEYS = {"factor_zoo": "code, date, field", "factor_zoo_latest": "code, field"}
 
 _UNARCHIVE = """
 DELETE FROM factor_zoo_removed
@@ -89,8 +91,8 @@ def main(argv=None) -> int:
                 dropped = conn.execute(
                     sqlalchemy.text("DELETE FROM factor_zoo_alias WHERE old_code = :old AND new_code = :new"),
                     {**params, "new": new}).rowcount
-                restored = {t: conn.execute(sqlalchemy.text(_RESTORE.format(table=t)), params).rowcount
-                            for t in ("factor_zoo", "factor_zoo_latest")}
+                restored = {t: conn.execute(sqlalchemy.text(_RESTORE.format(table=t, keys=k)), params).rowcount
+                            for t, k in _KEYS.items()}
                 unarchived = conn.execute(sqlalchemy.text(_UNARCHIVE), params).rowcount
                 trans.commit()
             except BaseException:
