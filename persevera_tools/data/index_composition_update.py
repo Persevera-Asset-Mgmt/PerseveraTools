@@ -10,11 +10,16 @@ date. Sessions are ANBIMA business days minus days without an Ibovespa close
 
 * **Window** — per index, from the last stored session (re-fetched) to the
   last session before today. An index with no rows starts at ``HISTORY_FLOOR``.
+  Stored rows are replaced from the window's requested start, so a day kept
+  provisionally (a B3-only closure whose missing Ibovespa close was not yet
+  known) is removed on the next run.
 * **Snapshots** — fetched on every month-end session, the window's first and
   last session, and, where two consecutive snapshots have different members,
-  by bisection down to the session the membership changed. Membership is
-  therefore exact on every session; weights are exact on fetched sessions and
-  carried forward in between (a daily run fetches every session).
+  by bisection down to the session the membership changed. A daily run
+  fetches every session, so it is exact. In a historical load a member that
+  enters and leaves between two snapshots with the same member set (a
+  temporary ticker for a few days) is missed; weights are exact on fetched
+  sessions and carried forward in between.
 * **Codes** — Bloomberg reports past members under their ticker at fetch time
   (CCRO3 in 2013 comes back as ``MOTV3 BZ`` → ``MOTV3``), so later ticker
   changes leave stored rows behind. As in factor_zoo, one security keeps one
@@ -29,9 +34,10 @@ date. Sessions are ANBIMA business days minus days without an Ibovespa close
 * **Writes** — each index's window is replaced in one transaction.
 
 Exits with status 1 if an index fails, a snapshot comes back empty after the
-index's inception, or an index is still more than ``MAX_STALE_SESSIONS``
-sessions behind after the run. Weights not summing to ~100% and large
-membership swings are printed as alerts.
+index's inception (or on the first session of a daily window), ``--start``
+would leave a gap after the last stored session, or an index is still more
+than ``MAX_STALE_SESSIONS`` sessions behind after the run. Weights not summing
+to ~100% after translation and large membership swings are printed as alerts.
 
 Examples::
 
@@ -65,10 +71,6 @@ HISTORY_FLOOR = pd.Timestamp("2000-01-03")
 MAX_STALE_SESSIONS = 5
 WEIGHT_SUM_TOLERANCE = 0.5  # percentage points around 100
 MEMBER_CHANGE_ALERT = 0.10  # share of members entering/leaving between snapshots
-# Old and new codes listed together for at most this many sessions are one
-# security on its ticker-change day; longer, they are two share classes
-# (AMBV3/AMBV4 next to ABEV3 until 2013) and their weights add up.
-TICKER_CHANGE_OVERLAP = 5
 FETCH_ATTEMPTS = 3
 
 Snapshot = pd.Series  # code -> weight (%), indexed by code
@@ -246,50 +248,45 @@ def translate(df: pd.DataFrame, aliases: pd.DataFrame) -> pd.DataFrame:
 
     A row is renamed when its date is on/after the alias ``effective_date``
     (or the alias has none); a successor's row dated before the
-    ``effective_date`` gets the old code back. Chains (A→B→C) are followed. When the old and new
-    codes are both listed on a day, the successor's row is kept, unless the
-    old code shares an index with its successor on more than
-    ``TICKER_CHANGE_OVERLAP`` sessions: those are distinct share classes and
-    their weights are added.
+    ``effective_date`` gets the old code back. Both directions follow chains
+    (A→B→C) regardless of the order of ``aliases``. When a renamed row lands
+    on a code already reported that day (old and new listed together on a
+    ticker change), the row Bloomberg reported under that code wins, as in the
+    ``factor_zoo.aliases`` SQL (``ON CONFLICT DO NOTHING``). Aliases must join
+    one security's listings, never two share classes trading side by side.
     """
     if df.empty or aliases.empty:
         return df
     out = df.copy()
-    out["_succ"] = False
-    out["_from"] = out["code"]
+    out["_moved"] = False
     # Before an alias's effective_date factor_zoo keeps the old code, but
     # Bloomberg reports the current ticker (AXIA6 in 2002 is ELET6 there).
-    dated = aliases.dropna(subset=["effective_date"])
-    for r in dated.itertuples(index=False):
-        back = (out["code"] == r.new_code) & (out["date"] < r.effective_date)
-        out.loc[back, "code"] = r.old_code
+    dated = aliases.dropna(subset=["effective_date"]).sort_values("effective_date")
+    back_map = dated.drop_duplicates("new_code", keep="last").set_index("new_code")
+    for _ in range(5):
+        hit = out["code"].isin(back_map.index)
+        if not hit.any():
+            break
+        eff = out.loc[hit, "code"].map(back_map["effective_date"])
+        idx = eff[out.loc[hit, "date"] < eff].index
+        if len(idx) == 0:
+            break
+        out.loc[idx, "code"] = out.loc[idx, "code"].map(back_map["old_code"])
+        out.loc[idx, "_moved"] = True
     amap = aliases.set_index("old_code")
     for _ in range(5):
         hit = out["code"].isin(amap.index)
-        if hit.any():
-            eff = out.loc[hit, "code"].map(amap["effective_date"])
-            in_scope = eff.isna() | (out.loc[hit, "date"] >= eff)
-            idx = in_scope[in_scope].index
-        else:
-            idx = []
+        if not hit.any():
+            break
+        eff = out.loc[hit, "code"].map(amap["effective_date"])
+        in_scope = eff.isna() | (out.loc[hit, "date"] >= eff)
+        idx = in_scope[in_scope].index
         if len(idx) == 0:
             break
         out.loc[idx, "code"] = out.loc[idx, "code"].map(amap["new_code"])
-        out.loc[idx, "_succ"] = True
+        out.loc[idx, "_moved"] = True
     keys = ["code", "date", "field"]
-    clash = out.duplicated(keys, keep=False)
-    renamed = out[clash & out["_succ"]]
-    overlap = renamed.groupby(["_from", "code", "field"])["date"].nunique()
-    classes = overlap[overlap > TICKER_CHANGE_OVERLAP].reset_index()[["_from", "code", "field"]]
-    parts = []
-    if not classes.empty:
-        tagged = renamed.merge(classes, on=["_from", "code", "field"])[keys].drop_duplicates()
-        in_sum = out.set_index(keys).index.isin(tagged.set_index(keys).index)
-        parts.append(out[in_sum].groupby(keys, as_index=False)["value"].sum())
-        out = out[~in_sum]
-    # Ticker-change days: rows that were already the successor come first and win.
-    parts.append(out.sort_values("_succ", kind="stable").drop_duplicates(keys, keep="first"))
-    out = pd.concat([p[keys + ["value"]] for p in parts], ignore_index=True)
+    out = out.sort_values("_moved", kind="stable").drop_duplicates(keys, keep="first")
     return out[list(df.columns)].sort_values(["date", "code"]).reset_index(drop=True)
 
 
@@ -321,13 +318,29 @@ def stale_members(members: dict[str, list[str]], end: pd.Timestamp) -> pd.DataFr
     return pd.DataFrame(rows, columns=["code", "fields", "last_price"])
 
 
+def alert_weight_sums(df: pd.DataFrame, field: str) -> int:
+    """Print sessions whose translated weights do not sum to ~100%; return their count.
+
+    Checked after ``translate``: on a ticker change B3 lists the old and new
+    codes together (ELET3 and AXIA3 on 2025-10-31, 108% before translation),
+    and an alias joining two share classes would drop one class's weight.
+    """
+    if df.empty:
+        return 0
+    sums = df.groupby("date")["value"].sum()
+    off = sums[(sums - 100.0).abs() > WEIGHT_SUM_TOLERANCE]
+    if len(off):
+        sample = ", ".join(f"{d.date()} {v:.2f}%" for d, v in off.head(5).items())
+        print(f"  ALERT {field}: weights off 100% on {len(off)} sessions "
+              f"({off.index.min().date()} to {off.index.max().date()}; {sample})", flush=True)
+    return len(off)
+
+
 def validate(snaps: dict[pd.Timestamp, Snapshot], field: str) -> list[str]:
     """Problems that fail the run (an empty composition after inception).
 
-    Weight sums away from 100% and large membership swings are only printed:
-    on a ticker change B3 lists the old and new codes on the same day with the
-    same weight (ELET3 and AXIA3 on 2025-10-31, sum 108%), which ``translate``
-    collapses before writing.
+    Large membership swings are only printed. Weight sums are checked after
+    translation (``alert_weight_sums``).
     """
     problems = []
     seen_members = False
@@ -338,9 +351,6 @@ def validate(snaps: dict[pd.Timestamp, Snapshot], field: str) -> list[str]:
                 problems.append(f"{field} {date.date()}: empty composition after inception")
             continue
         seen_members = True
-        total = float(snap.sum())
-        if abs(total - 100.0) > WEIGHT_SUM_TOLERANCE:
-            print(f"  ALERT {field} {date.date()}: weights sum to {total:.2f}%", flush=True)
         if prev is not None and not prev.empty:
             swing = len(_members(snap) ^ _members(prev)) / max(len(prev), 1)
             if swing > MEMBER_CHANGE_ALERT:
@@ -399,25 +409,38 @@ def run(fields: Sequence[str], *, start: Optional[pd.Timestamp] = None,
     for field in fields:
         t0 = time.time()
         try:
-            first = start if start is not None else stored.get(field, HISTORY_FLOOR)
-            cal = sessions(pd.Timestamp(first), end)
+            last_stored = stored.get(field)
+            first = pd.Timestamp(start if start is not None else (last_stored or HISTORY_FLOOR))
+            if start is not None and last_stored is not None and len(sessions(last_stored, first)) > 2:
+                raise ValueError(
+                    f"--start {first.date()} leaves a gap after the last stored session "
+                    f"{last_stored.date()}; start on or before the next session"
+                )
+            cal = sessions(first, end)
             if cal.empty:
-                print(f"{field}: up to date ({stored.get(field)})", flush=True)
+                print(f"{field}: up to date ({last_stored})", flush=True)
                 continue
             snaps = find_snapshots(fetcher_factory(INDICES[field]), cal)
             with_members = [d for d, s in snaps.items() if not s.empty]
             if not with_members:
                 raise ValueError(f"Bloomberg returned no members from {cal[0].date()}")
+            delete_from = first
             if with_members[0] > cal[0]:
+                if start is None and last_stored is not None:
+                    # A daily window starts on a stored session: an empty
+                    # composition there is a Bloomberg failure, not inception.
+                    raise ValueError(f"Bloomberg returned no members on {cal[0].date()}")
                 # Stored rows before Bloomberg's first composition stay untouched.
                 print(f"  {field}: Bloomberg history starts {with_members[0].date()}; "
                       f"rows before it are kept", flush=True)
                 cal = cal[cal >= with_members[0]]
                 snaps = {d: s for d, s in snaps.items() if d >= with_members[0]}
+                delete_from = cal[0]
             problems = validate(snaps, field)
             if problems:
                 raise ValueError("; ".join(problems))
             df = translate(densify(snaps, cal, field), aliases)
+            alert_weight_sums(df, field)
             if cal[-1] == end:
                 members_at_end[field] = df.loc[df["date"] == end, "code"].tolist()
             n_changes = sum(
@@ -426,7 +449,9 @@ def run(fields: Sequence[str], *, start: Optional[pd.Timestamp] = None,
             )
             msg = f"{len(snaps)} snapshots, {n_changes} membership changes, {len(df):,} rows"
             if not dry_run:
-                replace_window(df, field, cal[0], cal[-1])
+                # From the requested start, so a provisional B3-only closure
+                # stored by the previous run (now known closed) is removed.
+                replace_window(df, field, delete_from, cal[-1])
                 msg += " written"
             print(f"{field}: {cal[0].date()} -> {cal[-1].date()}: {msg} ({time.time() - t0:.0f}s)", flush=True)
         except Exception as exc:
