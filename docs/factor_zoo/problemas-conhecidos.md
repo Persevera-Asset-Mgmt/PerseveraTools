@@ -43,6 +43,24 @@ Mudança separada, ainda não implementada.
   `price_close` do factor_zoo, 5,1% casam via alias e 0,7% não casam (AMBV4,
   AMBV3 e TIET11 sem alias, cadastrados em 28/10/2026; PRGA4, ARCE4, BSUL5,
   SUBA3, PLAS4 e dois ids do Bloomberg deslistados).
+- **Aliases aplicados (28/10/2026):** 24 aliases na composição; nenhum código
+  antigo sobrou e a correspondência com o `price_close` do factor_zoo subiu
+  para 99,7% dos membros-dia (sobram PRGA4, ARCE4, SUBA3, BSUL5, PLAS4,
+  BRDT4-old e dois ids do Bloomberg). No factor_zoo, AMBV3 (141.979 linhas) e
+  TIET11 desde 2016 (39.189) foram arquivados em `factor_zoo_removed`.
+- **Classes que convivem no índice:** AMBV3/AMBV4 eram listadas junto com a
+  série ABEV3 até 2013. A regra "fica a linha do sucessor" (certa no dia de
+  uma troca de ticker) descartou o peso da outra classe: faltam ~4,7% no
+  IBX100 (2.163 dias), ~4,2% no MLCX (1.338) e ~1,2% no IBRA (324). A carga
+  passou a somar os pesos quando código antigo e sucessor convivem por mais
+  de `TICKER_CHANGE_OVERLAP` (5) pregões; o `aliases --apply` (SQL) mantém
+  "sucessor vence", então caso parecido descoberto no futuro pede recarga do
+  período.
+- **Somas de peso da carga antiga:** 820 combinações índice-dia fora de
+  100% ± 0,5 antes de qualquer alias (IBX100 de mar/2000 em ~67%; SMLL com 703
+  dias entre 99,4% e 101,1%). Motivo da recarga integral pelo Bloomberg. A
+  carga só substitui a partir do primeiro dia com membros no Bloomberg; o que
+  houver antes fica como está.
 - **Alias fora do Fibery:** quando o sucessor já saiu de Ações Ativas (AESB3,
   incorporada pela Auren), o par vai para o `SEED` do `aliases.py`; recolocar o
   sucessor em Ações Ativas faria o factor_zoo baixar um papel extinto. A carga alerta membros do último pregão sem
