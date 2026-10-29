@@ -29,8 +29,12 @@ Ver [../factor_zoo/problemas-conhecidos.md](../factor_zoo/problemas-conhecidos.m
    (`persevera_tools/data/index_composition_update.py`); falta a primeira
    execução no PC do Bloomberg.
 2. Traduzir tickers antigos para os sucessores do factor_zoo
-   (`factor_zoo_alias`, respeitando `effective_date`).
-3. Monitorar a data da última composição.
+   (`factor_zoo_alias`, respeitando `effective_date`). Feito na própria tabela
+   (carga e `aliases --apply`); o motor lê códigos canônicos.
+3. Monitorar a data da última composição (a carga falha com mais de 5 pregões
+   de atraso) e membros sem preço recente no factor_zoo (alerta).
+4. Cadastrar no Fibery os aliases que faltam: AMBV4 e AMBV3 → ABEV3,
+   TIET11 → AESB3.
 
 ## Desenho no motor
 
@@ -38,11 +42,9 @@ Ver [../factor_zoo/problemas-conhecidos.md](../factor_zoo/problemas-conhecidos.m
   (ex.: `"IBX100"` ou `("IBX100", "SMLL")`); substitui o filtro de taxonomia
   por denominação.
 - Em cada rebalanceamento, composição mais recente até a data (sem olhar para
-  frente), já traduzida pelos aliases.
+  frente); os códigos da tabela já são os canônicos do factor_zoo.
 - `index_max_age_days` (~10): composição mais velha que isso → erro, em vez de
   seguir com dado velho em silêncio.
-- Após traduzir pelos aliases, colapsar código antigo e novo listados no mesmo
-  dia (não somar pesos).
 - O rebalanceamento pode ser diário, semanal ou quinzenal: usar a composição
   do pregão (a tabela é diária).
 - ADTV, preço recente e `one_class_per_issuer` continuam valendo

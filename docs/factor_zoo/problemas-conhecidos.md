@@ -27,13 +27,24 @@ Mudança separada, ainda não implementada.
   ver "Carga da composição" abaixo.
 - **Código antigo e novo no mesmo dia:** na troca de ticker a B3 lista os dois
   com o mesmo peso (ELET3 e AXIA3, EMBR3 e EMBJ3 em 31/10/2025; soma 108%).
-  Quem lê precisa colapsar após traduzir pelos aliases (não somar).
+  Resolvido pela padronização de tickers (abaixo): fica a linha do sucessor.
 - **Duas convenções de ticker:** as linhas da carga antiga (até 18/06/2026)
   guardam os códigos da época (ELET3, EMBR3, MRFG3, NTCO3, ODPV3, GUAR3,
   AZUL4…), que o factor_zoo já trocou pelos sucessores (AXIA3, EMBJ3, MBRF3,
   NATU3, SAUD3, RIAA3, AZUL54…). O Bloomberg devolve o histórico com o ticker
-  atual (IBRA de 2013 traz MOTV3, AXIA3, GOLL54). Traduzir via
-  `factor_zoo_alias` cobre as duas (código já canônico passa sem mudar).
+  atual na data da consulta (IBRA de 2013 traz MOTV3, AXIA3, GOLL54), então
+  cada troca futura deixa linhas antigas para trás.
+- **Padronização de tickers:** como no factor_zoo, um ativo, um código. A carga
+  traduz pelo `factor_zoo_alias` (respeitando `effective_date`) antes de
+  gravar, e `factor_zoo.aliases --apply` (passo 2 do `.bat` diário) renomeia
+  as linhas já gravadas quando surge um alias novo, arquivando o original em
+  `factor_zoo_removed`. Primeira aplicação: 21 aliases, 143 mil linhas.
+- **Cobertura (28/10/2026):** em 94,2% dos membros-dia o código existe no
+  `price_close` do factor_zoo, 5,1% casam via alias e 0,7% não casam (AMBV4,
+  AMBV3 e TIET11 sem alias; PRGA4, ARCE4, BSUL5, SUBA3, PLAS4 e dois ids do
+  Bloomberg deslistados). A carga alerta membros do último pregão sem
+  `price_close` recente no factor_zoo: CBAV3 e MILS3 (em convergência por OPA,
+  tirados de Ações Ativas e retomados); AXIA6 sem negociação desde 05/06/2026.
 - **Deslistados sem ticker:** vêm do Bloomberg como ids (`0927042D`,
   `1844932D`) e não casam com o factor_zoo; pequeno viés de sobrevivência no
   histórico do IBRA.
