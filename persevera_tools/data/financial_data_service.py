@@ -352,8 +352,7 @@ class FinancialDataService:
                 if save_to_db:
                     self.logger.info(f"Saving {len(df)} rows to '{table_name}'")
                     try:
-                        # occurrence_id is unique per release, so a rescheduled event updates its row
-                        df = self._save_to_db(df, table_name, ['occurrence_id'])
+                        df = self._save_to_db(df, table_name, ['date', 'event_id'])
                     except Exception as e:
                         self.logger.error(f"Failed to save data to database: {str(e)}")
                         raise
