@@ -11,6 +11,7 @@ from .config import BacktestConfig
 from .data import (
     build_rebalance_dates,
     densify_prices,
+    index_members_at,
     load_backtest_panels,
     most_liquid_per_radical,
 )
@@ -156,6 +157,8 @@ def _rebal_row(
         "trading_cost": traded * float(payload.get("trading_cost_bps", 0.0)) / 10_000.0,
     }
     row.update(payload.get("beta_info") or {})
+    if payload.get("n_index_members") is not None:
+        row["n_index_members"] = int(payload["n_index_members"])
     cross_u = cross.reindex(universe)
     for comp in components:
         key = f"cov__{comp}"
@@ -211,14 +214,16 @@ def _form_rebalance_books(
     components: tuple[str, ...],
     higher_is_better: Mapping[str, bool],
     beta_panel: Optional[pd.DataFrame] = None,
+    membership: Optional[pd.DataFrame] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
     """Form scores/weights and collect rebalance diagnostics + drop events.
 
     A name is investable only if it still has a price inside ``price_ffill_limit``
     and its ADTV print is inside that same limit and at least ``adtv_min``.
-    Factor values may be older than that window. With ``config.beta_neutral``
-    the legs are resized with betas from ``beta_panel`` (no age limit, like
-    factor values).
+    Factor values may be older than that window. With ``config.universe_index``
+    it must also be an index member on the latest stored session on or before
+    the rebalance (``membership``). With ``config.beta_neutral`` the legs are
+    resized with betas from ``beta_panel`` (no age limit, like factor values).
     """
     score_rows: list[pd.Series] = []
     weight_rows: list[pd.Series] = []
@@ -228,6 +233,11 @@ def _form_rebalance_books(
 
     for dt in rebalance_dates:
         traded = _traded_names(prices, dt)
+        n_index_members: Optional[int] = None
+        if config.universe_index:
+            members = index_members_at(membership, dt, config.index_max_age_days)
+            n_index_members = len(members)
+            traded = traded.intersection(members)
         if traded.empty:
             continue
         adtv = snapshot_series(
@@ -310,6 +320,7 @@ def _form_rebalance_books(
                     "trading_cost_bps": config.trading_cost_bps,
                     "n_dropped_share_class": n_dropped_share_class,
                     "beta_info": beta_info,
+                    "n_index_members": n_index_members,
                 },
             )
         )
@@ -510,6 +521,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         components=components,
         higher_is_better=higher_is_better,
         beta_panel=panels.get("beta"),
+        membership=panels.get("membership"),
     )
     nav, strategy_returns, costs_df, hold_events, n_days_holdings, n_days_renorm = (
         _simulate_holdings_pnl(
@@ -550,6 +562,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             "trading_cost_bps": config.trading_cost_bps,
             "borrow_rate": config.borrow_rate,
             "beta_neutral": config.beta_neutral,
+            "universe_index": list(config.universe_index) if config.universe_index else None,
         }
     )
     summary.update(diag_summary)

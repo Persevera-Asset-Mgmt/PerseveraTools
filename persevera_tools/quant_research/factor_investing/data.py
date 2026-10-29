@@ -70,15 +70,80 @@ def load_factor_panel(
     return result.sort_index()
 
 
-def resolve_universe_codes(config: BacktestConfig) -> Optional[list[str]]:
+def load_index_membership(
+    indices: Sequence[str],
+    start_date: DateLike,
+    end_date: DateLike,
+) -> pd.DataFrame:
+    """
+    Members of ``indices`` per session from ``b3_index_composition``.
+
+    Returns distinct ``date``, ``code`` rows (union across indices). Codes are
+    factor_zoo's canonical codes (the loader and ``factor_zoo.aliases`` keep
+    the table on them).
+    """
+    from ...db.operations import read_sql
+
+    df = read_sql(
+        "SELECT DISTINCT date, code FROM b3_index_composition "
+        "WHERE field = ANY(:f) AND date BETWEEN :s AND :e",
+        params={
+            "f": list(indices),
+            "s": _to_timestamp(start_date).date(),
+            "e": _to_timestamp(end_date).date(),
+        },
+        date_columns=["date"],
+        raise_errors=True,
+    )
+    if df.empty:
+        return pd.DataFrame(columns=["date", "code"])
+    df["code"] = df["code"].astype(str)
+    return df.sort_values(["date", "code"]).reset_index(drop=True)
+
+
+def index_members_at(
+    membership: pd.DataFrame,
+    as_of: pd.Timestamp,
+    max_age_days: int,
+) -> pd.Index:
+    """
+    Members on the latest session on or before ``as_of``.
+
+    Raises when there is none, or when it is more than ``max_age_days``
+    calendar days old (a stale table would silently freeze the universe).
+    """
+    known = membership.loc[membership["date"] <= as_of, "date"]
+    if known.empty:
+        raise ValueError(f"No index composition on or before {as_of.date()}")
+    last = known.max()
+    age = (as_of - last).days
+    if age > max_age_days:
+        raise ValueError(
+            f"Index composition is stale on {as_of.date()}: last session "
+            f"{last.date()} is {age} days old (index_max_age_days={max_age_days})"
+        )
+    return pd.Index(membership.loc[membership["date"] == last, "code"].unique())
+
+
+def resolve_universe_codes(
+    config: BacktestConfig,
+    membership: Optional[pd.DataFrame] = None,
+) -> Optional[list[str]]:
     """
     Resolve the candidate ticker pool.
 
+    - With ``config.universe_index``, every code that is a member at some point
+      of the window (``membership``), intersected with ``config.codes`` if set.
     - If ``config.codes`` is set, use that list (still filtered by ADTV at rebalance).
     - Otherwise, use Fibery ``Inv-Taxonomia/Ativos`` filtered by ``denomination``
       (default BRL) and equity instruments — **not** the live Ações Ativas list —
       so historical names remain available; investability is decided by ADTV.
     """
+    if config.universe_index:
+        codes = sorted(membership["code"].unique()) if membership is not None else []
+        if config.codes is not None:
+            codes = [c for c in codes if c in set(config.codes)]
+        return codes
     if config.codes is not None:
         return list(config.codes)
     return get_codes_by_denomination(config.denomination)
@@ -126,15 +191,29 @@ def load_backtest_panels(
     """
     Load component, ADTV and price panels needed for a backtest run.
 
-    Candidate pool comes from ``resolve_universe_codes`` (taxonomy by denomination,
-    or an explicit ``codes`` list). The investable universe on each rebalance date
-    is names still printing ``price_field`` within ``price_ffill_limit`` business
-    days and with ``adtv_field >= adtv_min`` over that same window.
+    Candidate pool comes from ``resolve_universe_codes`` (index members, taxonomy
+    by denomination, or an explicit ``codes`` list). The investable universe on
+    each rebalance date is names still printing ``price_field`` within
+    ``price_ffill_limit`` business days and with ``adtv_field >= adtv_min`` over
+    that same window (and, with ``universe_index``, members on that date).
     """
-    codes = resolve_universe_codes(config)
+    membership = None
+    if config.universe_index:
+        membership = load_index_membership(
+            config.universe_index,
+            config.start_date - pd.Timedelta(days=config.index_max_age_days),
+            config.end_date,
+        )
+        if membership.empty:
+            raise ValueError(
+                f"No b3_index_composition rows for {list(config.universe_index)} "
+                f"between {config.start_date.date()} and {config.end_date.date()}"
+            )
+    codes = resolve_universe_codes(config, membership)
     if codes is not None and not codes:
         raise ValueError(
-            f"No taxonomy codes for denomination {config.denomination!r}"
+            f"No codes in the candidate pool (universe_index={config.universe_index!r}, "
+            f"denomination={config.denomination!r}, codes={config.codes!r})"
         )
 
     lookback_start = config.start_date - pd.Timedelta(days=365)
@@ -167,6 +246,7 @@ def load_backtest_panels(
         "adtv": _subset([config.adtv_field]),
         "prices": _subset([config.price_field]),
         "beta": _subset(beta_fields),
+        "membership": membership,
     }
 
 
