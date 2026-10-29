@@ -35,6 +35,10 @@ if errorlevel 1 goto :failed
 call :run_script -m persevera_tools.data.factor_zoo --incremental
 if errorlevel 1 goto :failed
 
+:: Step 4: B3 index composition (Bloomberg INDX_MWEIGHT_HIST), last stored session -> yesterday
+call :run_script -m persevera_tools.data.index_composition_update
+if errorlevel 1 goto :failed
+
 echo.
 echo All factor_zoo scripts completed successfully.
 %PAUSE_CMD%
