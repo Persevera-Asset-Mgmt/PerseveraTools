@@ -245,7 +245,8 @@ def translate(df: pd.DataFrame, aliases: pd.DataFrame) -> pd.DataFrame:
     """Rename old codes to their successors (``factor_zoo.aliases`` rule).
 
     A row is renamed when its date is on/after the alias ``effective_date``
-    (or the alias has none). Chains (A→B→C) are followed. When the old and new
+    (or the alias has none); a successor's row dated before the
+    ``effective_date`` gets the old code back. Chains (A→B→C) are followed. When the old and new
     codes are both listed on a day, the successor's row is kept, unless the
     old code shares an index with its successor on more than
     ``TICKER_CHANGE_OVERLAP`` sessions: those are distinct share classes and
@@ -256,6 +257,12 @@ def translate(df: pd.DataFrame, aliases: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["_succ"] = False
     out["_from"] = out["code"]
+    # Before an alias's effective_date factor_zoo keeps the old code, but
+    # Bloomberg reports the current ticker (AXIA6 in 2002 is ELET6 there).
+    dated = aliases.dropna(subset=["effective_date"])
+    for r in dated.itertuples(index=False):
+        back = (out["code"] == r.new_code) & (out["date"] < r.effective_date)
+        out.loc[back, "code"] = r.old_code
     amap = aliases.set_index("old_code")
     for _ in range(5):
         hit = out["code"].isin(amap.index)

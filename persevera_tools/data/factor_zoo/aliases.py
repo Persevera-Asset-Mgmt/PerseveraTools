@@ -29,6 +29,9 @@ Sources: the seed below, and the Fibery relation ``Códigos Anteriores`` on
 ``b3_index_composition`` follows the same rule: old-code rows in scope are
 archived, renamed to the successor (successor wins when both are listed on
 the same day, as B3 does on the day of a ticker change) and deleted.
+Bloomberg reports past members under the current ticker, so successor rows
+dated before an ``effective_date`` are renamed back to the old code, which
+is where factor_zoo keeps that stretch.
 
 Examples::
 
@@ -174,6 +177,44 @@ GROUP BY a.old_code, a.new_code, a.effective_date
 ORDER BY a.old_code
 """
 
+_SCOPE_BEFORE = """
+    FROM {table} z JOIN factor_zoo_alias a ON a.new_code = z.code
+    WHERE a.old_code = :old
+      AND a.effective_date IS NOT NULL
+      AND z.date < a.effective_date
+"""
+
+_PENDING_COMPOSITION_BEFORE = f"""
+SELECT a.old_code, a.new_code, a.effective_date, count(*) AS rows_total
+FROM factor_zoo_alias a
+JOIN {COMPOSITION_TABLE} z ON z.code = a.new_code
+WHERE a.effective_date IS NOT NULL AND z.date < a.effective_date
+GROUP BY a.old_code, a.new_code, a.effective_date
+ORDER BY a.old_code
+"""
+
+_ARCHIVE_BEFORE = """
+INSERT INTO factor_zoo_removed (code, date, field, value, from_table, reason)
+SELECT z.code, z.date, z.field, z.value, '{table}', :reason
+""" + _SCOPE_BEFORE
+
+# The old code wins on (date, field) clashes: it is canonical before effective_date.
+_RENAME_BACK_COMPOSITION = """
+INSERT INTO {table} (code, date, field, value)
+SELECT a.old_code, z.date, z.field, z.value
+""" + _SCOPE_BEFORE.format(table=COMPOSITION_TABLE) + """
+ON CONFLICT (code, date, field) DO NOTHING
+"""
+
+_DELETE_BEFORE = """
+DELETE FROM {table} z
+USING factor_zoo_alias a
+WHERE a.old_code = :old
+  AND a.new_code = z.code
+  AND a.effective_date IS NOT NULL
+  AND z.date < a.effective_date
+"""
+
 # Successor wins on (date, field) clashes.
 _RENAME_COMPOSITION = """
 INSERT INTO {table} (code, date, field, value)
@@ -254,6 +295,26 @@ def pending_composition(conn) -> pd.DataFrame:
     return pd.read_sql_query(sqlalchemy.text(_PENDING_COMPOSITION), conn)
 
 
+def pending_composition_before(conn) -> pd.DataFrame:
+    """Aliases with successor rows in ``b3_index_composition`` dated before ``effective_date``."""
+    return pd.read_sql_query(sqlalchemy.text(_PENDING_COMPOSITION_BEFORE), conn)
+
+
+def apply_composition_before(conn, todo: pd.DataFrame) -> pd.DataFrame:
+    """Archive successor rows dated before ``effective_date``, rename them back, delete."""
+    out = []
+    for r in todo.itertuples(index=False):
+        params = {"old": r.old_code,
+                  "reason": f"alias {r.old_code}->{r.new_code} before {r.effective_date}"}
+        conn.execute(sqlalchemy.text(_ARCHIVE_BEFORE.format(table=COMPOSITION_TABLE)), params)
+        renamed = conn.execute(sqlalchemy.text(_RENAME_BACK_COMPOSITION.format(table=COMPOSITION_TABLE)), params).rowcount
+        deleted = conn.execute(sqlalchemy.text(_DELETE_BEFORE.format(table=COMPOSITION_TABLE)), params).rowcount
+        logger.info("%s (%s): renamed back %s, deleted %s", params["reason"], COMPOSITION_TABLE, renamed, deleted)
+        out.append({"old_code": r.old_code, "new_code": r.new_code,
+                    "renamed_back_composition": renamed, "deleted_composition": deleted})
+    return pd.DataFrame(out)
+
+
 def apply_composition(conn, todo: pd.DataFrame) -> pd.DataFrame:
     """Archive old-code index rows, rename them to the successor, delete."""
     out = []
@@ -289,6 +350,7 @@ def run(*, do_apply: bool, use_seed: bool = True, use_fibery: bool = True) -> pd
                 added += register(conn, fibery_pairs, "fibery")
                 todo = pending(conn, fields)
                 todo_comp = pending_composition(conn)
+                todo_back = pending_composition_before(conn)
                 print(f"New aliases registered: {added}")
                 print(f"Aliases with rows to merge: {len(todo)}")
                 if len(todo):
@@ -299,6 +361,9 @@ def run(*, do_apply: bool, use_seed: bool = True, use_fibery: bool = True) -> pd
                 print(f"Aliases with {COMPOSITION_TABLE} rows to rename: {len(todo_comp)}")
                 if len(todo_comp):
                     print(todo_comp.to_string(index=False))
+                print(f"Aliases with {COMPOSITION_TABLE} successor rows before effective_date: {len(todo_back)}")
+                if len(todo_back):
+                    print(todo_back.to_string(index=False))
                 if not do_apply:
                     # Dry run: the alias registration is rolled back too.
                     trans.rollback()
@@ -306,6 +371,7 @@ def run(*, do_apply: bool, use_seed: bool = True, use_fibery: bool = True) -> pd
                     return todo
                 done = apply(conn, todo, fields)
                 done_comp = apply_composition(conn, todo_comp)
+                done_back = apply_composition_before(conn, todo_back)
                 trans.commit()
             except BaseException:
                 if trans.is_active:
@@ -314,6 +380,8 @@ def run(*, do_apply: bool, use_seed: bool = True, use_fibery: bool = True) -> pd
         print(done.to_string(index=False) if len(done) else "Nothing to remove.")
         if len(done_comp):
             print(done_comp.to_string(index=False))
+        if len(done_back):
+            print(done_back.to_string(index=False))
         return done
     finally:
         engine.dispose()

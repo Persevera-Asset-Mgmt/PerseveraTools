@@ -61,6 +61,18 @@ Mudança separada, ainda não implementada.
   dias entre 99,4% e 101,1%). Motivo da recarga integral pelo Bloomberg. A
   carga só substitui a partir do primeiro dia com membros no Bloomberg; o que
   houver antes fica como está.
+- **Ticker atual antes da vigência:** o Bloomberg devolve o ticker atual mesmo
+  antes do `effective_date` de um alias (AXIA6 no IBOV de 2002), mas o
+  factor_zoo guarda esse trecho no código antigo (ELET6 até 2019). Nesses
+  dias o backtest não acha preço: no IBOV recarregado, 98,4% dos membros-dia
+  tinham preço no factor_zoo, e todo o resto era AXIA6 e GOLL54 antes de
+  2020. A carga e o `aliases --apply` passaram a devolver o código antigo
+  antes da vigência (10.381 linhas pendentes em 29/10/2026: AXIA6, GOLL54,
+  AESB3). Medir cobertura por data, não só pela existência do código.
+- **Recarga pelo Bloomberg (29/10/2026):** IBOV de 2002 em diante. Entre
+  2000 e abril de 2001 o Bloomberg tem o IBOV incompleto (17 membros em
+  janeiro de 2001, contra 55 na tabela), então esse trecho ficou com a carga
+  antiga. IBX100 tem histórico no Bloomberg desde 2002 e IBX50 desde 2003.
 - **Alias fora do Fibery:** quando o sucessor já saiu de Ações Ativas (AESB3,
   incorporada pela Auren), o par vai para o `SEED` do `aliases.py`; recolocar o
   sucessor em Ações Ativas faria o factor_zoo baixar um papel extinto. A carga alerta membros do último pregão sem
