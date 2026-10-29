@@ -20,6 +20,9 @@ class InvestingComProvider(DataProvider):
             "X-Requested-With": "XMLHttpRequest"
         }
         self.base_url = "https://br.investing.com/economic-calendar/Service/getCalendarFilteredData"
+        self.timeout = 30  # seconds; without it a stalled connection hangs forever
+        # Flag keys that differ from the country names used in the output
+        self.flag_to_country_map = {'Europe': 'Eurozone'}
         self.currency_to_country_map = {
             'USD': 'United States', 'BRL': 'Brazil', 'EUR': 'Eurozone',
             'GBP': 'United Kingdom', 'JPY': 'Japan', 'CAD': 'Canada',
@@ -30,6 +33,14 @@ class InvestingComProvider(DataProvider):
         """Map currency codes to country names"""
         currency_clean = currency.strip().upper()
         return self.currency_to_country_map.get(currency_clean, 'Unknown')
+
+    def _get_country(self, flag_cell, currency: str) -> str:
+        """Country from the row's flag (e.g. data-img_key="United_States"); falls back to the currency map"""
+        flag = flag_cell.find('span', class_='ceFlags')
+        flag_key = flag.get('data-img_key', '') if flag else ''
+        if flag_key:
+            return self.flag_to_country_map.get(flag_key, flag_key.replace('_', ' '))
+        return self._get_country_from_currency(currency)
 
     def _parse_volatility(self, volatility_html: str) -> str:
         """Parse volatility level from bull icons"""
@@ -53,7 +64,7 @@ class InvestingComProvider(DataProvider):
         }
         
         try:
-            response = requests.post(self.base_url, headers=self.headers, data=data)
+            response = requests.post(self.base_url, headers=self.headers, data=data, timeout=self.timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
@@ -96,15 +107,19 @@ class InvestingComProvider(DataProvider):
                         previous = cells[6].get_text(strip=True) or None
                         
                         event_datetime = row.get('data-event-datetime', '')
+                        # event_attr_id identifies the event type (e.g. 829 = Manufacturing PMI, every month);
+                        # the row id (eventRowId_559178) identifies this occurrence and survives reschedules
                         event_id = row.get('event_attr_id', '')
-                        
-                        country = self._get_country_from_currency(currency)
-                        
+                        occurrence_id = row.get('id', '').removeprefix('eventRowId_')
+
+                        country = self._get_country(cells[1], currency)
+
                         events.append({
                             'date_header': current_date, 'time': time, 'datetime': event_datetime,
                             'country': country, 'currency': currency, 'volatility': volatility,
                             'event_name': event_name, 'actual': actual, 'forecast': forecast,
-                            'previous': previous, 'event_id': event_id, 'event_url': event_url
+                            'previous': previous, 'occurrence_id': occurrence_id, 'event_id': event_id,
+                            'event_url': event_url
                         })
                         
                 except Exception as e:
@@ -132,7 +147,9 @@ class InvestingComProvider(DataProvider):
             current_tab (str, optional): Data tab. Defaults to 'nextWeek'.
             
         Returns:
-            pd.DataFrame: DataFrame with columns: ['date', 'event_id', 'country', 'currency', 'event_name', 'importance', 'event_url'].
+            pd.DataFrame: DataFrame with columns: ['date', 'occurrence_id', 'event_id', 'country', 'currency',
+                'event_name', 'importance', 'event_url']. 'date' is in Brasília time (timeZone 12);
+                'occurrence_id' is unique per release, 'event_id' is the recurring event type.
         """
         self._log_processing(category)
         if data_type != 'economic_calendar':
@@ -151,7 +168,7 @@ class InvestingComProvider(DataProvider):
             self.logger.warning("No events found after parsing.")
             return pd.DataFrame()
 
-        df = df[['datetime_parsed', 'event_id', 'country', 'currency', 'event_name', 'volatility', 'event_url']]
+        df = df[['datetime_parsed', 'occurrence_id', 'event_id','country', 'currency', 'event_name', 'volatility', 'event_url']]
         df = df.rename(columns={'datetime_parsed': 'date', 'volatility': 'importance'})
         
         return df

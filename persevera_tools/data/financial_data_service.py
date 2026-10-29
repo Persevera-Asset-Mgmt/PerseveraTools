@@ -1,6 +1,7 @@
 from typing import Optional, Dict, List, Union, Literal, Any
 import pandas as pd
 import logging
+import time
 
 from .providers.bloomberg import BloombergProvider, DataCategory
 from .providers.sgs import SGSProvider
@@ -351,7 +352,8 @@ class FinancialDataService:
                 if save_to_db:
                     self.logger.info(f"Saving {len(df)} rows to '{table_name}'")
                     try:
-                        df = self._save_to_db(df, table_name, ['date', 'event_id'])
+                        # occurrence_id is unique per release, so a rescheduled event updates its row
+                        df = self._save_to_db(df, table_name, ['occurrence_id'])
                     except Exception as e:
                         self.logger.error(f"Failed to save data to database: {str(e)}")
                         raise
@@ -363,8 +365,10 @@ class FinancialDataService:
                 last_error = e
                 self.logger.warning(f"Attempt {attempt} failed: {str(e)}")
                 if attempt < retry_attempts:
-                    self.logger.info(f"Retrying... ({attempt}/{retry_attempts})")
-        
+                    wait = 2 ** attempt
+                    self.logger.info(f"Retrying in {wait}s... ({attempt}/{retry_attempts})")
+                    time.sleep(wait)
+
         error_msg = f"Failed to retrieve data from Investing.com after {retry_attempts} attempts. Last error: {str(last_error)}"
         self.logger.error(error_msg)
         raise RuntimeError(error_msg)
