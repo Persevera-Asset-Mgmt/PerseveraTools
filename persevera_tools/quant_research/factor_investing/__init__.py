@@ -33,7 +33,7 @@ from .definitions import (
     load_factor_definitions,
 )
 from .engine import run_backtest
-from .portfolio import scores_to_weights
+from .portfolio import beta_neutralize, scores_to_weights
 from .result import BacktestDiagnostics, BacktestResult
 from .scoring import calculate_factor_exposure
 
@@ -44,6 +44,7 @@ __all__ = [
     "run_backtest",
     "calculate_factor_exposure",
     "scores_to_weights",
+    "beta_neutralize",
     "load_factor_definitions",
     "load_asset_taxonomy",
     "clear_factor_definitions_cache",

@@ -87,3 +87,55 @@ def scores_to_weights(
         return weights[weights != 0.0]
 
     raise ValueError(f"Unknown construction: {construction!r}")
+
+
+def beta_neutralize(
+    weights: pd.Series,
+    betas: pd.Series,
+) -> tuple[pd.Series, dict[str, float]]:
+    """
+    Resize the legs of a long/short book so its ex-ante beta is zero.
+
+    Within each leg the relative weights are kept; the leg grosses become
+    ``g_L = G * b_S / (b_L + b_S)`` and ``g_S = G * b_L / (b_L + b_S)``, where
+    ``G`` is the input gross and ``b_L`` / ``b_S`` are the weighted leg betas.
+    Missing betas take the median of ``betas``. When either leg beta is not
+    positive the book is returned unchanged.
+
+    Returns the new weights and a dict with ``beta_long``, ``beta_short``,
+    ``gross_long``, ``gross_short`` and ``net_beta`` (after resizing).
+    """
+    longs = weights[weights > 0]
+    shorts = weights[weights < 0]
+    info = {
+        "beta_long": float("nan"),
+        "beta_short": float("nan"),
+        "gross_long": float(longs.sum()),
+        "gross_short": float(-shorts.sum()),
+        "net_beta": float("nan"),
+    }
+    if longs.empty or shorts.empty:
+        return weights, info
+
+    b = betas.reindex(weights.index).astype(float)
+    fill = float(betas.median()) if betas.notna().any() else 1.0
+    b = b.fillna(fill)
+
+    beta_long = float((longs * b[longs.index]).sum() / longs.sum())
+    beta_short = float((shorts * b[shorts.index]).sum() / shorts.sum())
+    info["beta_long"] = beta_long
+    info["beta_short"] = beta_short
+    if beta_long <= 0 or beta_short <= 0:
+        info["net_beta"] = float((weights * b).sum())
+        return weights, info
+
+    gross = info["gross_long"] + info["gross_short"]
+    gross_long = gross * beta_short / (beta_long + beta_short)
+    gross_short = gross * beta_long / (beta_long + beta_short)
+    out = weights.copy()
+    out.loc[longs.index] = longs / longs.sum() * gross_long
+    out.loc[shorts.index] = shorts / (-shorts.sum()) * gross_short
+    info["gross_long"] = gross_long
+    info["gross_short"] = gross_short
+    info["net_beta"] = float((out * b).sum())
+    return out, info

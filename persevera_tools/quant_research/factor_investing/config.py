@@ -51,6 +51,12 @@ class BacktestConfig:
       - ``borrow_rate`` is an annualized decimal (same convention as
         ``risk_free_rate``), accrued daily as
         ``short_gross * borrow_rate / 252``. Long-only is unaffected.
+
+    Beta neutrality (``long_short`` only): with ``beta_neutral=True`` each
+    rebalance resizes the legs so that ``gross_long * beta_long ==
+    gross_short * beta_short`` while ``gross_long + gross_short`` stays 2.
+    Leg betas are the equal-weighted ``beta_field`` of the leg's names on the
+    rebalance date (missing betas take the median of the scored names).
     """
 
     start_date: DateLike
@@ -77,6 +83,8 @@ class BacktestConfig:
     initial_nav: float = 1.0
     trading_cost_bps: float = 0.0
     borrow_rate: float = 0.0
+    beta_neutral: bool = False
+    beta_field: str = "beta"
 
     def __post_init__(self) -> None:
         self.start_date = _to_timestamp(self.start_date)
@@ -110,6 +118,10 @@ class BacktestConfig:
             raise ValueError("trading_cost_bps must be >= 0")
         if self.borrow_rate < 0:
             raise ValueError("borrow_rate must be >= 0")
+        if self.beta_neutral and self.construction != "long_short":
+            raise ValueError("beta_neutral requires construction='long_short'")
+        if self.beta_neutral and not str(self.beta_field).strip():
+            raise ValueError("beta_field cannot be empty when beta_neutral=True")
         if not self.style and not self.components:
             raise ValueError("Provide style and/or components")
         if self.rebalance_dates is None and not self.rebalance_freq:
