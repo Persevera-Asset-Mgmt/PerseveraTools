@@ -33,8 +33,10 @@ Ver [../factor_zoo/problemas-conhecidos.md](../factor_zoo/problemas-conhecidos.m
    (carga e `aliases --apply`); o motor lê códigos canônicos.
 3. Monitorar a data da última composição (a carga falha com mais de 5 pregões
    de atraso) e membros sem preço recente no factor_zoo (alerta).
-4. Cadastrar no Fibery os aliases que faltam: AMBV4 e AMBV3 → ABEV3,
-   TIET11 → AESB3.
+4. Aliases que faltavam: AMBV4 e AMBV3 → ABEV3 cadastrados no Fibery
+   (Códigos Anteriores do ABEV3, 28/10/2026); TIET11 → AESB3 no `SEED` do
+   `aliases.py`, porque AESB3 saiu de Ações Ativas após a incorporação pela
+   Auren.
 
 ## Desenho no motor
 
