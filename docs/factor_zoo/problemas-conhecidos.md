@@ -46,16 +46,34 @@ Mudança separada, ainda não implementada.
 - **Aliases aplicados (28/10/2026):** 24 aliases na composição; nenhum código
   antigo sobrou e a correspondência com o `price_close` do factor_zoo subiu
   para 99,7% dos membros-dia (sobram PRGA4, ARCE4, SUBA3, BSUL5, PLAS4,
-  BRDT4-old e dois ids do Bloomberg). No factor_zoo, AMBV3 (141.979 linhas) e
-  TIET11 desde 2016 (39.189) foram arquivados em `factor_zoo_removed`.
-- **Classes que convivem no índice:** AMBV3/AMBV4 eram listadas junto com a
-  série ABEV3 até 2013. A regra "fica a linha do sucessor" (certa no dia de
-  uma troca de ticker) descartou o peso da outra classe: faltam ~4,7% no
-  IBX100 (2.163 dias), ~4,2% no MLCX (1.338) e ~1,2% no IBRA (324). A carga
-  passou a somar os pesos quando código antigo e sucessor convivem por mais
-  de `TICKER_CHANGE_OVERLAP` (5) pregões; o `aliases --apply` (SQL) mantém
-  "sucessor vence", então caso parecido descoberto no futuro pede recarga do
-  período.
+  BRDT4-old e dois ids do Bloomberg). No factor_zoo, AMBV3 (141.979 linhas,
+  por engano, ver abaixo) e TIET11 desde 2016 (39.189) foram arquivados em
+  `factor_zoo_removed`.
+- **Alias errado AMBV3 → ABEV3 (corrigir):** AMBV3 (ON) e AMBV4 (PN) foram
+  convertidas em ABEV3 em nov/2013, mas a série que o Bloomberg emenda no
+  ABEV3 é a da AMBV4; a AMBV3 é outra classe (correlação de retornos 0,83 em
+  2010–2013). O alias AMBV3 → ABEV3 (sem vigência) apagou as 141.979 linhas
+  da AMBV3 no factor_zoo (arquivadas) e juntou ON e PN na composição. Uma
+  regra de "somar pesos de classes que convivem" foi criada por causa disso e
+  removida em 29/10/2026: além de partir do diagnóstico errado, dependia do
+  tamanho da janela e divergia do SQL. Correção: tirar AMBV3 dos Códigos
+  Anteriores do ABEV3 no Fibery, rodar `scripts/factor_zoo_revert_alias.py
+  AMBV3 ABEV3 --apply` e recarregar o IBRA desde 2012-07-23. AMBV4 → ABEV3 é
+  correto. Regra geral: alias junta as listagens de um mesmo papel no tempo,
+  nunca duas classes negociadas lado a lado.
+- **Revisão da carga (29/10/2026):** revisão independente encontrou e foi
+  corrigido: (1) dia de B3 fechada gravado provisoriamente (24/12, 31/12)
+  nunca era apagado, porque a janela seguinte começava depois dele; agora a
+  substituição começa na data pedida. (2) Snapshot vazio no 1º pregão de uma
+  carga diária era tratado como "antes do lançamento"; agora falha. (3)
+  `--start` depois do último pregão gravado deixava buraco; agora falha. (4)
+  Cadeias de aliases com vigência dependiam da ordem das linhas; agora
+  resolvem em qualquer ordem, na carga e no SQL (que repete até não sobrar
+  pendência). (5) Na colisão, vence a linha que o Bloomberg reportou com
+  aquele código, nos dois caminhos. (6) Soma de pesos é checada depois da
+  tradução. Limite conhecido: numa carga histórica, um membro que entra e sai
+  entre dois snapshots com os mesmos membros (ticker temporário de poucos
+  dias) não é detectado; a carga diária busca todo pregão.
 - **Somas de peso da carga antiga:** 820 combinações índice-dia fora de
   100% ± 0,5 antes de qualquer alias (IBX100 de mar/2000 em ~67%; SMLL com 703
   dias entre 99,4% e 101,1%). Motivo da recarga integral pelo Bloomberg. A

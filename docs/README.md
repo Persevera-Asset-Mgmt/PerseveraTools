@@ -20,5 +20,5 @@ mostraram e o que ainda está em aberto.
 |---|---|---|
 | [factor_investing/estilos-longo-prazo.md](factor_investing/estilos-longo-prazo.md) | Aprendizado | Backtests de Value, Quality, Momentum e Risk; origem das quebras de performance |
 | [factor_investing/ls-beta-neutro.md](factor_investing/ls-beta-neutro.md) | Implementado (PR #14) | Long/short beta-neutro |
-| [factor_investing/universo-por-indice.md](factor_investing/universo-por-indice.md) | Proposta | Universo pelos membros de índices B3 em vez de ADTV fixo |
+| [factor_investing/universo-por-indice.md](factor_investing/universo-por-indice.md) | Implementado | Universo pelos membros de índices B3 em vez de ADTV fixo |
 | [factor_zoo/problemas-conhecidos.md](factor_zoo/problemas-conhecidos.md) | Aprendizado | Preços errados, composição de índices desatualizada, tickers antigos |

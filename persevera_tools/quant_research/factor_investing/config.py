@@ -34,6 +34,14 @@ class BacktestConfig:
     last value with no age limit. Pass ``codes`` to restrict further (this skips
     the ``denomination`` filter).
 
+    Index universe: ``universe_index`` (a ``b3_index_composition`` field such as
+    ``"IBX100"``, or several, e.g. ``("IBX100", "SMLL")``) replaces the
+    ``denomination`` pool with the index members. On each rebalance a name must
+    also be a member on the latest stored session on or before the date; that
+    session may be at most ``index_max_age_days`` calendar days old or the run
+    fails. The price and ADTV filters still apply (``adtv_min=0`` disables
+    ADTV); ``codes``, when also given, intersects the members.
+
     ``one_class_per_issuer=True`` keeps only the highest-ADTV ticker per B3
     radical (e.g. PETR3 vs PETR4) among names with factor data, re-chosen on
     every rebalance.
@@ -85,6 +93,8 @@ class BacktestConfig:
     borrow_rate: float = 0.0
     beta_neutral: bool = False
     beta_field: str = "beta"
+    universe_index: Optional[Union[str, Sequence[str]]] = None
+    index_max_age_days: int = 10
 
     def __post_init__(self) -> None:
         self.start_date = _to_timestamp(self.start_date)
@@ -130,6 +140,13 @@ class BacktestConfig:
             self.components = tuple(str(c) for c in self.components)
             if not self.components:
                 raise ValueError("components cannot be empty when provided")
+        if self.universe_index is not None:
+            names = (self.universe_index,) if isinstance(self.universe_index, str) else self.universe_index
+            self.universe_index = tuple(str(n).strip() for n in names if str(n).strip())
+            if not self.universe_index:
+                raise ValueError("universe_index cannot be empty when provided")
+        if self.index_max_age_days < 0:
+            raise ValueError("index_max_age_days must be >= 0")
         if self.codes is not None:
             self.codes = tuple(str(c) for c in self.codes)
             if not self.codes:

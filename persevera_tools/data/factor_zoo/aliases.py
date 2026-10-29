@@ -31,7 +31,13 @@ archived, renamed to the successor (successor wins when both are listed on
 the same day, as B3 does on the day of a ticker change) and deleted.
 Bloomberg reports past members under the current ticker, so successor rows
 dated before an ``effective_date`` are renamed back to the old code, which
-is where factor_zoo keeps that stretch.
+is where factor_zoo keeps that stretch (old code wins on clashes). Both
+passes repeat until nothing is pending, so chains (A→B→C) resolve in one run.
+
+An alias joins one security's listings over time. Two share classes that
+traded side by side and were later merged into one ticker (AMBV3 ON and
+AMBV4 PN into ABEV3 in 2013) are not aliases of each other: aliasing the
+class Bloomberg did not chain (AMBV3) would delete its distinct history.
 
 Examples::
 
@@ -372,6 +378,14 @@ def run(*, do_apply: bool, use_seed: bool = True, use_fibery: bool = True) -> pd
                 done = apply(conn, todo, fields)
                 done_comp = apply_composition(conn, todo_comp)
                 done_back = apply_composition_before(conn, todo_back)
+                # A rename can bring rows into another alias's scope (chains).
+                for _ in range(4):
+                    more_comp = pending_composition(conn)
+                    more_back = pending_composition_before(conn)
+                    if more_comp.empty and more_back.empty:
+                        break
+                    done_comp = pd.concat([done_comp, apply_composition(conn, more_comp)], ignore_index=True)
+                    done_back = pd.concat([done_back, apply_composition_before(conn, more_back)], ignore_index=True)
                 trans.commit()
             except BaseException:
                 if trans.is_active:
