@@ -5,7 +5,8 @@ Daily step of the factor_zoo run. Requires a Bloomberg Terminal.
 ``INDX_MWEIGHT_HIST`` with ``END_DATE_OVERRIDE`` returns every member of an
 index on a date (delisted names included) and its weight in percent. The table
 keeps one row per member per B3 session, so readers can take any rebalance
-date:
+date. Sessions are ANBIMA business days minus days without an Ibovespa close
+(B3-only closures such as 24/12, 31/12 and the São Paulo holidays):
 
 * **Window** — per index, from the last stored session (re-fetched) to the
   last session before today. An index with no rows starts at ``HISTORY_FLOOR``.
@@ -14,9 +15,17 @@ date:
   by bisection down to the session the membership changed. Membership is
   therefore exact on every session; weights are exact on fetched sessions and
   carried forward in between (a daily run fetches every session).
-* **Codes** — stored as Bloomberg reports them on that date (``ELET3 BZ`` →
-  ``ELET3``); translating them to factor_zoo successors is the reader's job
-  (``factor_zoo_alias``).
+* **Codes** — Bloomberg reports past members under their ticker at fetch time
+  (CCRO3 in 2013 comes back as ``MOTV3 BZ`` → ``MOTV3``), so later ticker
+  changes leave stored rows behind. As in factor_zoo, one security keeps one
+  code: rows are translated through ``factor_zoo_alias`` (respecting
+  ``effective_date``) before writing, and ``factor_zoo.aliases --apply``
+  renames stored rows when a new alias appears. Members delisted without a
+  ticker come back as Bloomberg ids (``0927042D``) and match nothing.
+* **Coverage** — index members on the last session whose ``price_close`` in
+  factor_zoo is older than ``MAX_STALE_SESSIONS`` sessions are printed as
+  alerts (dropped from ``Ações Ativas``, ticker change without an alias, no
+  trading), since backtests silently skip them.
 * **Writes** — each index's window is replaced in one transaction.
 
 Exits with status 1 if an index fails, a snapshot comes back empty after the
@@ -36,6 +45,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from functools import lru_cache
 from typing import Callable, Optional, Sequence
 
 import pandas as pd
@@ -61,11 +71,36 @@ Snapshot = pd.Series  # code -> weight (%), indexed by code
 Fetcher = Callable[[pd.Timestamp], Snapshot]
 
 
-def sessions(start: pd.Timestamp, end: pd.Timestamp) -> pd.DatetimeIndex:
-    """B3 sessions in ``[start, end]`` (weekdays minus ANBIMA holidays)."""
+@lru_cache(maxsize=1)
+def _anbima_holidays() -> tuple:
     from persevera_tools.utils.dates import get_holidays
 
-    return pd.bdate_range(start, end, freq="C", holidays=list(get_holidays()))
+    return tuple(get_holidays())
+
+
+@lru_cache(maxsize=1)
+def _ibov_closes() -> pd.DatetimeIndex:
+    from persevera_tools.data import get_series
+
+    ibov = get_series("br_ibovespa", start_date=HISTORY_FLOOR, end_date=pd.Timestamp.today())
+    return pd.DatetimeIndex(ibov.squeeze().dropna().index).normalize()
+
+
+def drop_closed(cal: pd.DatetimeIndex, closes: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Remove days of ``cal`` with no close in ``closes``, up to the last close.
+
+    Days after the last close stay (yesterday's close may not be loaded yet).
+    """
+    if closes.empty:
+        return cal
+    closed = cal[(cal <= closes.max()) & ~cal.isin(closes)]
+    return cal.difference(closed)
+
+
+def sessions(start: pd.Timestamp, end: pd.Timestamp) -> pd.DatetimeIndex:
+    """B3 sessions in ``[start, end]``: ANBIMA business days with an Ibovespa close."""
+    cal = pd.bdate_range(start, end, freq="C", holidays=list(_anbima_holidays()))
+    return drop_closed(cal, _ibov_closes())
 
 
 def parse_bds(raw: pd.DataFrame) -> Snapshot:
@@ -102,9 +137,16 @@ def parse_bds(raw: pd.DataFrame) -> Snapshot:
 
 def bloomberg_fetcher(bbg_ticker: str) -> Fetcher:
     """Fetch one index's composition on a date, with retries."""
+    from importlib.metadata import version
+
     from persevera_tools.data.providers.bloomberg import _get_blp
 
     blp = _get_blp()
+    # xbbg 0.x warns that bds defaults flip to narwhals/long in 1.0; 1.x bds
+    # has no ``format`` argument (it would be sent as an override).
+    output = {"backend": "pandas"}
+    if int(version("xbbg").split(".")[0]) < 1:
+        output["format"] = "wide"
 
     def fetch(date: pd.Timestamp) -> Snapshot:
         last = None
@@ -114,7 +156,7 @@ def bloomberg_fetcher(bbg_ticker: str) -> Fetcher:
                     bbg_ticker,
                     "INDX_MWEIGHT_HIST",
                     END_DATE_OVERRIDE=pd.Timestamp(date).strftime("%Y%m%d"),
-                    backend="pandas",
+                    **output,
                 )
                 return parse_bds(raw)
             except Exception as exc:  # retried, then re-raised
@@ -188,13 +230,77 @@ def densify(snaps: dict[pd.Timestamp, Snapshot], cal: pd.DatetimeIndex, field: s
     return out.sort_values(["date", "code"]).reset_index(drop=True)
 
 
+def load_aliases() -> pd.DataFrame:
+    from persevera_tools.db.operations import read_sql
+
+    return read_sql("SELECT old_code, new_code, effective_date FROM factor_zoo_alias",
+                    date_columns=["effective_date"], raise_errors=True)
+
+
+def translate(df: pd.DataFrame, aliases: pd.DataFrame) -> pd.DataFrame:
+    """Rename old codes to their successors (``factor_zoo.aliases`` rule).
+
+    A row is renamed when its date is on/after the alias ``effective_date``
+    (or the alias has none). Chains (A→B→C) are followed. When the old and new
+    codes are both listed on a day, the successor's row is kept.
+    """
+    if df.empty or aliases.empty:
+        return df
+    out = df.copy()
+    out["_succ"] = False
+    amap = aliases.set_index("old_code")
+    for _ in range(5):
+        hit = out["code"].isin(amap.index)
+        if hit.any():
+            eff = out.loc[hit, "code"].map(amap["effective_date"])
+            in_scope = eff.isna() | (out.loc[hit, "date"] >= eff)
+            idx = in_scope[in_scope].index
+        else:
+            idx = []
+        if len(idx) == 0:
+            break
+        out.loc[idx, "code"] = out.loc[idx, "code"].map(amap["new_code"])
+        out.loc[idx, "_succ"] = True
+    # Rows that were already the successor come first and win.
+    out = out.sort_values("_succ", kind="stable").drop_duplicates(["code", "date", "field"], keep="first")
+    return out.drop(columns="_succ").sort_values(["date", "code"]).reset_index(drop=True)
+
+
+def stale_members(members: dict[str, list[str]], end: pd.Timestamp) -> pd.DataFrame:
+    """Members whose factor_zoo ``price_close`` is older than ``MAX_STALE_SESSIONS`` sessions.
+
+    ``members`` maps table field → codes on ``end``. Returns code, fields and
+    last price date (NaT when there is none in the last ~3 months).
+    """
+    from persevera_tools.db.operations import read_sql
+
+    codes = sorted({c for cs in members.values() for c in cs})
+    if not codes:
+        return pd.DataFrame(columns=["code", "fields", "last_price"])
+    since = end - pd.Timedelta(days=90)
+    last = read_sql(
+        "SELECT code, max(date) AS last_price FROM factor_zoo "
+        "WHERE field = 'price_close' AND code = ANY(:c) AND date >= :s GROUP BY code",
+        params={"c": codes, "s": since.date()}, date_columns=["last_price"], raise_errors=True,
+    ).set_index("code")["last_price"]
+    window = sessions(since, end)
+    cutoff = window[-(MAX_STALE_SESSIONS + 1)] if len(window) > MAX_STALE_SESSIONS else window[0]
+    rows = []
+    for code in codes:
+        lp = last.get(code, pd.NaT)
+        if pd.isna(lp) or lp < cutoff:
+            fields = ",".join(f for f, cs in members.items() if code in cs)
+            rows.append({"code": code, "fields": fields, "last_price": lp})
+    return pd.DataFrame(rows, columns=["code", "fields", "last_price"])
+
+
 def validate(snaps: dict[pd.Timestamp, Snapshot], field: str) -> list[str]:
     """Problems that fail the run (an empty composition after inception).
 
     Weight sums away from 100% and large membership swings are only printed:
     on a ticker change B3 lists the old and new codes on the same day with the
-    same weight (ELET3 and AXIA3 on 2025-10-31, sum 108%), which readers
-    collapse when translating codes through ``factor_zoo_alias``.
+    same weight (ELET3 and AXIA3 on 2025-10-31, sum 108%), which ``translate``
+    collapses before writing.
     """
     problems = []
     seen_members = False
@@ -259,7 +365,9 @@ def run(fields: Sequence[str], *, start: Optional[pd.Timestamp] = None,
     end_cal = sessions(today - pd.Timedelta(days=15), today - pd.Timedelta(days=1))
     end = end_cal[-1]
     stored = last_stored_dates()
+    aliases = load_aliases()
     failed: dict[str, str] = {}
+    members_at_end: dict[str, list[str]] = {}
 
     for field in fields:
         t0 = time.time()
@@ -273,7 +381,9 @@ def run(fields: Sequence[str], *, start: Optional[pd.Timestamp] = None,
             problems = validate(snaps, field)
             if problems:
                 raise ValueError("; ".join(problems))
-            df = densify(snaps, cal, field)
+            df = translate(densify(snaps, cal, field), aliases)
+            if cal[-1] == end:
+                members_at_end[field] = df.loc[df["date"] == end, "code"].tolist()
             n_changes = sum(
                 1 for a, b in zip(list(snaps.values())[:-1], list(snaps.values())[1:])
                 if _members(a) != _members(b)
@@ -286,6 +396,12 @@ def run(fields: Sequence[str], *, start: Optional[pd.Timestamp] = None,
         except Exception as exc:
             print(f"FAILED {field}: {exc}", flush=True)
             failed[field] = str(exc)
+
+    stale = stale_members(members_at_end, end)
+    for r in stale.itertuples(index=False):
+        last = r.last_price.date() if pd.notna(r.last_price) else "none in 90 days"
+        print(f"  ALERT {r.code} ({r.fields}): index member on {end.date()}, "
+              f"last factor_zoo price_close {last}", flush=True)
 
     if not dry_run:
         stored = last_stored_dates()

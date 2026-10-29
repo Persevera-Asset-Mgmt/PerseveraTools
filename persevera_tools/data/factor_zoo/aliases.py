@@ -26,6 +26,10 @@ Tables
 Sources: the seed below, and the Fibery relation ``Códigos Anteriores`` on
 ``Ações Ativas`` (successor → its previous tickers), synced on every run.
 
+``b3_index_composition`` follows the same rule: old-code rows in scope are
+archived, renamed to the successor (successor wins when both are listed on
+the same day, as B3 does on the day of a ticker change) and deleted.
+
 Examples::
 
     python -m persevera_tools.data.factor_zoo.aliases            # dry run
@@ -155,6 +159,25 @@ WHERE a.old_code = :old
   AND (a.effective_date IS NULL OR z.date >= a.effective_date)
 """
 
+COMPOSITION_TABLE = "b3_index_composition"
+
+_PENDING_COMPOSITION = f"""
+SELECT a.old_code, a.new_code, a.effective_date, count(*) AS rows_total
+FROM factor_zoo_alias a
+JOIN {COMPOSITION_TABLE} z ON z.code = a.old_code
+WHERE a.effective_date IS NULL OR z.date >= a.effective_date
+GROUP BY a.old_code, a.new_code, a.effective_date
+ORDER BY a.old_code
+"""
+
+# Successor wins on (date, field) clashes.
+_RENAME_COMPOSITION = """
+INSERT INTO {table} (code, date, field, value)
+SELECT a.new_code, z.date, z.field, z.value
+""" + _SCOPE.format(table=COMPOSITION_TABLE) + """
+ON CONFLICT (code, date, field) DO NOTHING
+"""
+
 
 def company_level_fields() -> list[str]:
     """Raw mnemonics that describe the company (copied to the successor)."""
@@ -222,6 +245,29 @@ def apply(conn, todo: pd.DataFrame, fields: Sequence[str]) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
+def pending_composition(conn) -> pd.DataFrame:
+    """Aliases that still have old-code rows in ``b3_index_composition``."""
+    return pd.read_sql_query(sqlalchemy.text(_PENDING_COMPOSITION), conn)
+
+
+def apply_composition(conn, todo: pd.DataFrame) -> pd.DataFrame:
+    """Archive old-code index rows, rename them to the successor, delete."""
+    out = []
+    for r in todo.itertuples(index=False):
+        params = {"old": r.old_code, "reason": f"alias {r.old_code}->{r.new_code}"}
+        conn.execute(sqlalchemy.text(_ARCHIVE.format(table=COMPOSITION_TABLE)), params)
+        renamed = conn.execute(
+            sqlalchemy.text(_RENAME_COMPOSITION.format(table=COMPOSITION_TABLE)), params
+        ).rowcount
+        deleted = conn.execute(
+            sqlalchemy.text(_DELETE.format(table=COMPOSITION_TABLE)), params
+        ).rowcount
+        logger.info("%s (%s): renamed %s, deleted %s", params["reason"], COMPOSITION_TABLE, renamed, deleted)
+        out.append({"old_code": r.old_code, "new_code": r.new_code,
+                    "renamed_composition": renamed, "deleted_composition": deleted})
+    return pd.DataFrame(out)
+
+
 def run(*, do_apply: bool, use_seed: bool = True, use_fibery: bool = True) -> pd.DataFrame:
     """Sync aliases and (optionally) remove superseded rows, in one transaction."""
     fibery_pairs = fibery_successions() if use_fibery else []
@@ -238,6 +284,7 @@ def run(*, do_apply: bool, use_seed: bool = True, use_fibery: bool = True) -> pd
                     added += register(conn, SEED, "seed 2026-10-06")
                 added += register(conn, fibery_pairs, "fibery")
                 todo = pending(conn, fields)
+                todo_comp = pending_composition(conn)
                 print(f"New aliases registered: {added}")
                 print(f"Aliases with rows to merge: {len(todo)}")
                 if len(todo):
@@ -245,18 +292,24 @@ def run(*, do_apply: bool, use_seed: bool = True, use_fibery: bool = True) -> pd
                           .sum().map("{:,}".format).to_string())
                 if len(todo):
                     print(todo.to_string(index=False))
+                print(f"Aliases with {COMPOSITION_TABLE} rows to rename: {len(todo_comp)}")
+                if len(todo_comp):
+                    print(todo_comp.to_string(index=False))
                 if not do_apply:
                     # Dry run: the alias registration is rolled back too.
                     trans.rollback()
                     print("Dry run: nothing written (use --apply).")
                     return todo
                 done = apply(conn, todo, fields)
+                done_comp = apply_composition(conn, todo_comp)
                 trans.commit()
             except BaseException:
                 if trans.is_active:
                     trans.rollback()
                 raise
         print(done.to_string(index=False) if len(done) else "Nothing to remove.")
+        if len(done_comp):
+            print(done_comp.to_string(index=False))
         return done
     finally:
         engine.dispose()
