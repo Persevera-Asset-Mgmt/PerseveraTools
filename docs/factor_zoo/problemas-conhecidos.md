@@ -28,10 +28,15 @@ Mudança separada, ainda não implementada.
 - **Código antigo e novo no mesmo dia:** na troca de ticker a B3 lista os dois
   com o mesmo peso (ELET3 e AXIA3, EMBR3 e EMBJ3 em 31/10/2025; soma 108%).
   Quem lê precisa colapsar após traduzir pelos aliases (não somar).
-- **Tickers antigos:** a tabela guarda os códigos da época (ELET3, EMBR3,
-  MRFG3, NTCO3, ODPV3, GUAR3, AZUL4…), que o factor_zoo já trocou pelos
-  sucessores (AXIA3, EMBJ3, MBRF3, NATU3, SAUD3, RIAA3, AZUL54…). Sem
-  tradução via `factor_zoo_alias` esses nomes somem do universo.
+- **Duas convenções de ticker:** as linhas da carga antiga (até 18/06/2026)
+  guardam os códigos da época (ELET3, EMBR3, MRFG3, NTCO3, ODPV3, GUAR3,
+  AZUL4…), que o factor_zoo já trocou pelos sucessores (AXIA3, EMBJ3, MBRF3,
+  NATU3, SAUD3, RIAA3, AZUL54…). O Bloomberg devolve o histórico com o ticker
+  atual (IBRA de 2013 traz MOTV3, AXIA3, GOLL54). Traduzir via
+  `factor_zoo_alias` cobre as duas (código já canônico passa sem mudar).
+- **Deslistados sem ticker:** vêm do Bloomberg como ids (`0927042D`,
+  `1844932D`) e não casam com o factor_zoo; pequeno viés de sobrevivência no
+  histórico do IBRA.
 - **Cobertura:** IBOV e IBX100 desde 2000, IBX50 desde 2002, MLCX e SMLL desde
   2008; diária; `value` é o peso no índice.
 
@@ -51,5 +56,15 @@ Mudança separada, ainda não implementada.
 - Falha (exit 1) em erro de consulta, composição vazia após o início do
   índice ou índice mais de 5 pregões atrasado. Soma de pesos ≠ 100% e troca de
   mais de 10% dos membros só geram alerta.
-- Ainda não rodou contra o Bloomberg: primeira execução deve ser manual com
-  `--dry-run` no PC do terminal.
+- Pregões: dias úteis ANBIMA com fechamento do Ibovespa. A B3 fecha em dias
+  que a ANBIMA não lista (24/12, 31/12 ou último dia útil do ano, 25/01 e
+  09/07 até 2021, 20/11 até 2019); nesses dias o Bloomberg às vezes já
+  devolve a carteira seguinte (IBRA em 31/12/2015).
+- Primeira carga em 2026-10-28 (PC do Bloomberg): 5 índices de 19/06 a 27/10
+  e IBRA desde o lançamento (23/07/2012, 860 consultas, ~15 min). Emenda com a
+  carga antiga sem troca de membros; pesos somam 100% ± 0,5 em todo pregão.
+  GOLL54 sai do IBRA em 30/01/2024 e AZUL54 em 29/05/2025, antes dos preços
+  errados; GOLL4 sai do IBX100 da carga antiga um pregão antes (29/01/2024),
+  então as fontes podem divergir em ±1 pregão nas datas de troca.
+- xbbg: o PC do Bloomberg usa 0.12 (`bds` aceita `format`, fixado em
+  `wide`); o `.venv` tem 1.4, cujo `bds` não tem `format`.

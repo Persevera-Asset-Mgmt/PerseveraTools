@@ -5,7 +5,8 @@ Daily step of the factor_zoo run. Requires a Bloomberg Terminal.
 ``INDX_MWEIGHT_HIST`` with ``END_DATE_OVERRIDE`` returns every member of an
 index on a date (delisted names included) and its weight in percent. The table
 keeps one row per member per B3 session, so readers can take any rebalance
-date:
+date. Sessions are ANBIMA business days minus days without an Ibovespa close
+(B3-only closures such as 24/12, 31/12 and the São Paulo holidays):
 
 * **Window** — per index, from the last stored session (re-fetched) to the
   last session before today. An index with no rows starts at ``HISTORY_FLOOR``.
@@ -14,9 +15,12 @@ date:
   by bisection down to the session the membership changed. Membership is
   therefore exact on every session; weights are exact on fetched sessions and
   carried forward in between (a daily run fetches every session).
-* **Codes** — stored as Bloomberg reports them on that date (``ELET3 BZ`` →
-  ``ELET3``); translating them to factor_zoo successors is the reader's job
-  (``factor_zoo_alias``).
+* **Codes** — Bloomberg reports past members under their current ticker
+  (CCRO3 in 2013 comes back as ``MOTV3 BZ`` → ``MOTV3``), matching factor_zoo's
+  canonical codes. Rows loaded before the 2026 migration carry the code of
+  their date (CCRO3), so readers still translate through ``factor_zoo_alias``.
+  Members delisted without a ticker come back as Bloomberg ids (``0927042D``)
+  and match nothing in factor_zoo.
 * **Writes** — each index's window is replaced in one transaction.
 
 Exits with status 1 if an index fails, a snapshot comes back empty after the
@@ -36,6 +40,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from functools import lru_cache
 from typing import Callable, Optional, Sequence
 
 import pandas as pd
@@ -61,11 +66,36 @@ Snapshot = pd.Series  # code -> weight (%), indexed by code
 Fetcher = Callable[[pd.Timestamp], Snapshot]
 
 
-def sessions(start: pd.Timestamp, end: pd.Timestamp) -> pd.DatetimeIndex:
-    """B3 sessions in ``[start, end]`` (weekdays minus ANBIMA holidays)."""
+@lru_cache(maxsize=1)
+def _anbima_holidays() -> tuple:
     from persevera_tools.utils.dates import get_holidays
 
-    return pd.bdate_range(start, end, freq="C", holidays=list(get_holidays()))
+    return tuple(get_holidays())
+
+
+@lru_cache(maxsize=1)
+def _ibov_closes() -> pd.DatetimeIndex:
+    from persevera_tools.data import get_series
+
+    ibov = get_series("br_ibovespa", start_date=HISTORY_FLOOR, end_date=pd.Timestamp.today())
+    return pd.DatetimeIndex(ibov.squeeze().dropna().index).normalize()
+
+
+def drop_closed(cal: pd.DatetimeIndex, closes: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Remove days of ``cal`` with no close in ``closes``, up to the last close.
+
+    Days after the last close stay (yesterday's close may not be loaded yet).
+    """
+    if closes.empty:
+        return cal
+    closed = cal[(cal <= closes.max()) & ~cal.isin(closes)]
+    return cal.difference(closed)
+
+
+def sessions(start: pd.Timestamp, end: pd.Timestamp) -> pd.DatetimeIndex:
+    """B3 sessions in ``[start, end]``: ANBIMA business days with an Ibovespa close."""
+    cal = pd.bdate_range(start, end, freq="C", holidays=list(_anbima_holidays()))
+    return drop_closed(cal, _ibov_closes())
 
 
 def parse_bds(raw: pd.DataFrame) -> Snapshot:
@@ -102,9 +132,16 @@ def parse_bds(raw: pd.DataFrame) -> Snapshot:
 
 def bloomberg_fetcher(bbg_ticker: str) -> Fetcher:
     """Fetch one index's composition on a date, with retries."""
+    from importlib.metadata import version
+
     from persevera_tools.data.providers.bloomberg import _get_blp
 
     blp = _get_blp()
+    # xbbg 0.x warns that bds defaults flip to narwhals/long in 1.0; 1.x bds
+    # has no ``format`` argument (it would be sent as an override).
+    output = {"backend": "pandas"}
+    if int(version("xbbg").split(".")[0]) < 1:
+        output["format"] = "wide"
 
     def fetch(date: pd.Timestamp) -> Snapshot:
         last = None
@@ -114,7 +151,7 @@ def bloomberg_fetcher(bbg_ticker: str) -> Fetcher:
                     bbg_ticker,
                     "INDX_MWEIGHT_HIST",
                     END_DATE_OVERRIDE=pd.Timestamp(date).strftime("%Y%m%d"),
-                    backend="pandas",
+                    **output,
                 )
                 return parse_bds(raw)
             except Exception as exc:  # retried, then re-raised
