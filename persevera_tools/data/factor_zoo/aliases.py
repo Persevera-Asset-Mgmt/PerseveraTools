@@ -73,6 +73,10 @@ SEED: tuple[tuple[str, str], ...] = (
     ("ODPV3", "SAUD3"), ("TRAD3", "ECOM3"),
     # Aura Minerals: Toronto line (CAD) superseded by the US line (USD).
     ("ORA", "AUGO"),
+    # AES Tietê units -> AES Brasil (2021). AESB3 left Ações Ativas after the
+    # 2024 merger into Auren, so the Fibery relation cannot carry it.
+    # Bloomberg chains AESB3 from 2016-01-14 (effective date).
+    ("TIET11", "AESB3"),
 )
 
 _DDL = """

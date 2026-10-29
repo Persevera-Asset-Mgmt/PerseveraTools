@@ -41,8 +41,11 @@ Mudança separada, ainda não implementada.
   `factor_zoo_removed`. Primeira aplicação: 21 aliases, 143 mil linhas.
 - **Cobertura (28/10/2026):** em 94,2% dos membros-dia o código existe no
   `price_close` do factor_zoo, 5,1% casam via alias e 0,7% não casam (AMBV4,
-  AMBV3 e TIET11 sem alias; PRGA4, ARCE4, BSUL5, SUBA3, PLAS4 e dois ids do
-  Bloomberg deslistados). A carga alerta membros do último pregão sem
+  AMBV3 e TIET11 sem alias, cadastrados em 28/10/2026; PRGA4, ARCE4, BSUL5,
+  SUBA3, PLAS4 e dois ids do Bloomberg deslistados).
+- **Alias fora do Fibery:** quando o sucessor já saiu de Ações Ativas (AESB3,
+  incorporada pela Auren), o par vai para o `SEED` do `aliases.py`; recolocar o
+  sucessor em Ações Ativas faria o factor_zoo baixar um papel extinto. A carga alerta membros do último pregão sem
   `price_close` recente no factor_zoo: CBAV3 e MILS3 (em convergência por OPA,
   tirados de Ações Ativas e retomados); AXIA6 sem negociação desde 05/06/2026.
 - **Deslistados sem ticker:** vêm do Bloomberg como ids (`0927042D`,
