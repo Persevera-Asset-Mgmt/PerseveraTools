@@ -65,6 +65,10 @@ HISTORY_FLOOR = pd.Timestamp("2000-01-03")
 MAX_STALE_SESSIONS = 5
 WEIGHT_SUM_TOLERANCE = 0.5  # percentage points around 100
 MEMBER_CHANGE_ALERT = 0.10  # share of members entering/leaving between snapshots
+# Old and new codes listed together for at most this many sessions are one
+# security on its ticker-change day; longer, they are two share classes
+# (AMBV3/AMBV4 next to ABEV3 until 2013) and their weights add up.
+TICKER_CHANGE_OVERLAP = 5
 FETCH_ATTEMPTS = 3
 
 Snapshot = pd.Series  # code -> weight (%), indexed by code
@@ -242,12 +246,16 @@ def translate(df: pd.DataFrame, aliases: pd.DataFrame) -> pd.DataFrame:
 
     A row is renamed when its date is on/after the alias ``effective_date``
     (or the alias has none). Chains (A→B→C) are followed. When the old and new
-    codes are both listed on a day, the successor's row is kept.
+    codes are both listed on a day, the successor's row is kept, unless the
+    old code shares an index with its successor on more than
+    ``TICKER_CHANGE_OVERLAP`` sessions: those are distinct share classes and
+    their weights are added.
     """
     if df.empty or aliases.empty:
         return df
     out = df.copy()
     out["_succ"] = False
+    out["_from"] = out["code"]
     amap = aliases.set_index("old_code")
     for _ in range(5):
         hit = out["code"].isin(amap.index)
@@ -261,9 +269,21 @@ def translate(df: pd.DataFrame, aliases: pd.DataFrame) -> pd.DataFrame:
             break
         out.loc[idx, "code"] = out.loc[idx, "code"].map(amap["new_code"])
         out.loc[idx, "_succ"] = True
-    # Rows that were already the successor come first and win.
-    out = out.sort_values("_succ", kind="stable").drop_duplicates(["code", "date", "field"], keep="first")
-    return out.drop(columns="_succ").sort_values(["date", "code"]).reset_index(drop=True)
+    keys = ["code", "date", "field"]
+    clash = out.duplicated(keys, keep=False)
+    renamed = out[clash & out["_succ"]]
+    overlap = renamed.groupby(["_from", "code", "field"])["date"].nunique()
+    classes = overlap[overlap > TICKER_CHANGE_OVERLAP].reset_index()[["_from", "code", "field"]]
+    parts = []
+    if not classes.empty:
+        tagged = renamed.merge(classes, on=["_from", "code", "field"])[keys].drop_duplicates()
+        in_sum = out.set_index(keys).index.isin(tagged.set_index(keys).index)
+        parts.append(out[in_sum].groupby(keys, as_index=False)["value"].sum())
+        out = out[~in_sum]
+    # Ticker-change days: rows that were already the successor come first and win.
+    parts.append(out.sort_values("_succ", kind="stable").drop_duplicates(keys, keep="first"))
+    out = pd.concat([p[keys + ["value"]] for p in parts], ignore_index=True)
+    return out[list(df.columns)].sort_values(["date", "code"]).reset_index(drop=True)
 
 
 def stale_members(members: dict[str, list[str]], end: pd.Timestamp) -> pd.DataFrame:
@@ -378,6 +398,15 @@ def run(fields: Sequence[str], *, start: Optional[pd.Timestamp] = None,
                 print(f"{field}: up to date ({stored.get(field)})", flush=True)
                 continue
             snaps = find_snapshots(fetcher_factory(INDICES[field]), cal)
+            with_members = [d for d, s in snaps.items() if not s.empty]
+            if not with_members:
+                raise ValueError(f"Bloomberg returned no members from {cal[0].date()}")
+            if with_members[0] > cal[0]:
+                # Stored rows before Bloomberg's first composition stay untouched.
+                print(f"  {field}: Bloomberg history starts {with_members[0].date()}; "
+                      f"rows before it are kept", flush=True)
+                cal = cal[cal >= with_members[0]]
+                snaps = {d: s for d, s in snaps.items() if d >= with_members[0]}
             problems = validate(snaps, field)
             if problems:
                 raise ValueError("; ".join(problems))
