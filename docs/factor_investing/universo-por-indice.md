@@ -1,6 +1,7 @@
 # Universo pelos membros de índices B3
 
-- **Status:** Implementado (`BacktestConfig.universe_index`)
+- **Status:** Implementado (`BacktestConfig.universe_index`, PR #22; Hub:
+  Persevera-Asset-Mgmt/PerseveraHub#17)
 - **Atualizado em:** 2026-10-29
 
 ## Motivação
@@ -28,6 +29,24 @@ BacktestConfig(..., universe_index=("IBX100", "SMLL"), adtv_min=0)
 - Diagnóstico por rebalanceamento: `n_index_members`.
 - Os códigos da tabela já são os canônicos do factor_zoo (a carga e o
   `aliases --apply` traduzem, inclusive o código antigo antes da vigência).
+
+## Hub
+
+Tela Factor Investing (PerseveraHub#17, persevera-tools na revisão
+`07fa020`):
+
+- Campo "Índices B3" (múltipla escolha; vazio = todas as ações BRL), que vira
+  `universe_index` em ordem canônica, para a chave do cache não depender da
+  ordem do clique.
+- A API recusa índice inválido e início antes da primeira composição do
+  índice: IBOV e IBX100 em 03/01/2000, IBX50 em 01/11/2002, SMLL e MLCX em
+  19/06/2008, IBRA em 23/07/2012.
+- O ADTV continua valendo junto com o índice; com índice escolhido e ADTV > 0
+  a tela avisa "Soma com o índice; 0 = só o índice".
+- O rótulo ganha ` · IBX100+SMLL` e a aba de rebalanceamentos mostra
+  "Membros do índice" (`n_index_members`).
+- Conferência: Value LO, IBX100 ∪ SMLL, ADTV 0, pelo código do Hub deu
+  13,17% a.a. e 27,7 nomes em média, igual ao motor.
 
 ## Resultados (2010-01-01 a 2026-10-27)
 
