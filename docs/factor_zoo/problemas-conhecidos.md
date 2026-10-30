@@ -1,7 +1,7 @@
 # factor_zoo: problemas conhecidos
 
 - **Status:** Aprendizado
-- **Atualizado em:** 2026-10-28
+- **Atualizado em:** 2026-10-29
 
 ## Preços errados após reestruturação
 
@@ -20,7 +20,7 @@ Mudança separada, ainda não implementada.
 
 ## Composição de índices B3 (`b3_index_composition`)
 
-- **Desatualizada:** última data em 19/06/2026 (IBOV, IBX100, IBX50, MLCX,
+- **Desatualizada (resolvido em 28/10/2026, PR #15):** última data em 19/06/2026 (IBOV, IBX100, IBX50, MLCX,
   SMLL); perdeu a revisão de setembro. A carga antiga saiu na migração.
   Substituída por `persevera_tools/data/index_composition_update.py`
   (Bloomberg `INDX_MWEIGHT_HIST`, passo 4 do `run_factor_zoo_daily.bat`);
@@ -47,9 +47,9 @@ Mudança separada, ainda não implementada.
   antigo sobrou e a correspondência com o `price_close` do factor_zoo subiu
   para 99,7% dos membros-dia (sobram PRGA4, ARCE4, SUBA3, BSUL5, PLAS4,
   BRDT4-old e dois ids do Bloomberg). No factor_zoo, AMBV3 (141.979 linhas,
-  por engano, ver abaixo) e TIET11 desde 2016 (39.189) foram arquivados em
-  `factor_zoo_removed`.
-- **Alias errado AMBV3 → ABEV3 (corrigir):** AMBV3 (ON) e AMBV4 (PN) foram
+  por engano, ver abaixo; já restauradas) e TIET11 desde 2016 (39.189) foram
+  arquivados em `factor_zoo_removed`.
+- **Alias errado AMBV3 → ABEV3 (corrigido em 29/10/2026):** AMBV3 (ON) e AMBV4 (PN) foram
   convertidas em ABEV3 em nov/2013, mas a série que o Bloomberg emenda no
   ABEV3 é a da AMBV4; a AMBV3 é outra classe (correlação de retornos 0,83 em
   2010–2013). O alias AMBV3 → ABEV3 (sem vigência) apagou as 141.979 linhas
@@ -60,7 +60,12 @@ Mudança separada, ainda não implementada.
   Anteriores do ABEV3 no Fibery, rodar `scripts/factor_zoo_revert_alias.py
   AMBV3 ABEV3 --apply` e recarregar o IBRA desde 2012-07-23. AMBV4 → ABEV3 é
   correto. Regra geral: alias junta as listagens de um mesmo papel no tempo,
-  nunca duas classes negociadas lado a lado.
+  nunca duas classes negociadas lado a lado. Feito: AMBV3 saiu do Fibery, o
+  script restaurou as 141.979 linhas e apagou o alias, e o IBRA foi
+  recarregado; AMBV3 e ABEV3 ficam separados até 08/11/2013. A primeira
+  execução do script falhou (o `ON CONFLICT` do `factor_zoo_latest` usava
+  `(code, date, field)`, mas a chave é `(code, field)`) e foi desfeita pela
+  transação; o script corrigido rodou sem erro (PR #22).
 - **Revisão da carga (29/10/2026):** revisão independente encontrou e foi
   corrigido: (1) dia de B3 fechada gravado provisoriamente (24/12, 31/12)
   nunca era apagado, porque a janela seguinte começava depois dele; agora a
@@ -96,6 +101,18 @@ Mudança separada, ainda não implementada.
   sucessor em Ações Ativas faria o factor_zoo baixar um papel extinto. A carga alerta membros do último pregão sem
   `price_close` recente no factor_zoo: CBAV3 e MILS3 (em convergência por OPA,
   tirados de Ações Ativas e retomados); AXIA6 sem negociação desde 05/06/2026.
+  Em 29/10/2026, com CBAV3 e MILS3 de volta em Ações Ativas, o alerta está
+  vazio.
+- **Buraco de preço da AESB3:** sem `price_close` no factor_zoo de fevereiro
+  a maio de 2016. Nesse trecho o backtest não acha preço para ela. Em aberto.
+- **Estado em 29/10/2026 (após as recargas, PRs #16, #18, #21 e #22):** os
+  seis índices vão até 28/10/2026 (IBOV 76 membros, IBX100 100, IBX50 50,
+  IBRA 148, SMLL 103, MLCX 44). Nenhuma linha em dia sem pregão, nenhum
+  código antigo dentro da vigência de um alias e nenhum sucessor antes dela.
+  Cobertura de `price_close` por data entre 99,3% e 99,96% dos membros-dia,
+  conforme o índice. Somas de peso fora de 100% ± 0,5 desde 2002: 1 dia no
+  IBOV (99,4%) e 51 no MLCX, todos no trecho da carga antiga mantido
+  (jun–ago/2008).
 - **Deslistados sem ticker:** vêm do Bloomberg como ids (`0927042D`,
   `1844932D`) e não casam com o factor_zoo; pequeno viés de sobrevivência no
   histórico do IBRA.
@@ -128,5 +145,13 @@ Mudança separada, ainda não implementada.
   GOLL54 sai do IBRA em 30/01/2024 e AZUL54 em 29/05/2025, antes dos preços
   errados; GOLL4 sai do IBX100 da carga antiga um pregão antes (29/01/2024),
   então as fontes podem divergir em ±1 pregão nas datas de troca.
+- Na carga diária a janela vai do último pregão gravado até o pregão
+  anterior à execução: o pregão do dia entra na execução seguinte, e o último
+  gravado é buscado de novo (limpa dados provisórios).
+- Pontos em aberto: (1) as trocas de membros do IBX50 passam com frequência
+  do limite de 10% e poluem o log; dá para subir o limite só desse índice.
+  (2) O `.bat` diário grava o log com `>`, então uma execução manual apaga o
+  log da agendada (aconteceu em 29/10/2026 às 19:32, antes de conferir o
+  passo 4); gravar com `>>` ou um log por data resolveria.
 - xbbg: o PC do Bloomberg usa 0.12 (`bds` aceita `format`, fixado em
   `wide`); o `.venv` tem 1.4, cujo `bds` não tem `format`.
