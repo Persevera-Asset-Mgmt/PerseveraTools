@@ -17,6 +17,10 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pytest -q tests/
 ```
 
+Os testes são offline e rodam no GitHub Actions em todo PR
+(`.github/workflows/tests.yml`): com as versões do `uv.lock` e com as do PC
+Bloomberg (Windows, Python 3.11, pandas 2.2.2, numpy 1.26.4).
+
 ## Módulos
 
 | Módulo | Conteúdo |
