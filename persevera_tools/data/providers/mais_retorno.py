@@ -173,7 +173,7 @@ class MaisRetornoProvider(DataProvider):
             # Attempt to load from indicadores_definicoes where source='mais_retorno' and category matches
             try:
                 query = """SELECT DISTINCT code
-                FROM credito_privado_historico
+                FROM renda_fixa_historico
                 WHERE LENGTH(code) <= 6
                 ORDER BY code;"""
                 codes = read_sql(query)

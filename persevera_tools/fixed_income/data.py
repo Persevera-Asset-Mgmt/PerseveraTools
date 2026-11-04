@@ -101,7 +101,7 @@ def get_references(
     """Get reference maturities from the credito_privado_referencia table.
 
     The ``reference`` dates (e.g. the benchmark NTN-B maturity matched to each
-    IPCA-linked private credit asset) used to live in ``credito_privado_historico``
+    IPCA-linked private credit asset) used to live in ``renda_fixa_historico``
     and are now stored in the dedicated ``credito_privado_referencia`` table
     with columns ``code, date, reference``.
 
@@ -259,11 +259,11 @@ def get_series(
         raise ValueError("end_date cannot be before start_date")
 
     if category == 'credito_privado_di':
-        table_name = 'credito_privado_historico'
+        table_name = 'renda_fixa_historico'
         cols = ['date', 'code', 'field', 'value']
         date_cols = ['date']
     elif category == 'credito_privado_ipca':
-        table_name = 'credito_privado_historico'
+        table_name = 'renda_fixa_historico'
         cols = ['date', 'code', 'value']
         date_cols = ['date']
     elif category == 'titulos_publicos':
@@ -271,13 +271,13 @@ def get_series(
         cols = ['date', 'code', 'maturity', 'value']
         date_cols = ['date', 'maturity']
     elif category is None:
-        table_name = 'credito_privado_historico'
+        table_name = 'renda_fixa_historico'
         cols = ['date', 'code', 'field', 'value', 'source']
         date_cols = ['date']
     else:
         raise ValueError("Invalid category")
 
-    table_has_source = table_name == 'credito_privado_historico'
+    table_has_source = table_name == 'renda_fixa_historico'
     if source == 'all' and table_has_source and 'source' not in cols:
         cols = cols + ['source']
 
