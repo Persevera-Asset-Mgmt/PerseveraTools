@@ -1,26 +1,33 @@
-# Motor RBS – Espectro de Alocação (Risk Budgeting paramétrico)
+# PerseveraTools
 
-## Fonte dos inputs: Fibery, space Inv-Rsrch-Quant
-- O modelo baseia-se no fato de que a decisão de alocação em caixa/CDI curto é uma decisão de liquidez, não investimento. Por isso não entra no modelo.
-- Calibração de Mercado: σ min/max, N Profiles, Min Weight Threshold. Hoje só existe  "Calibração - 2026-05-04" (Rascunho).
-- Classes de Ativo (13) + Parâmetros de Classe: Default Vol, Max Weight, Max RC por classe.
-- RC Target por Bucket: RC P1, RC P10 e Curvatura por bucket (RF, RV, Alternativos).
-- Correlações: somente Cross-Classe, com a matriz completa (78 pares, incl. intra-bucket).
-  Convenção: Classe A no bucket de menor índice (RF < Alt < RV). Intra-Classe e
-  Macro-Bucket foram apagadas (não eram lidas pelo motor).
-
-## Problemas conhecidos na calibração
-- Long & Short: os 12 pares de correlação são SIMULADOS (criados em 2026-09-27,
-  public-id 68–79 na Cross-Classe), a substituir por valores estimados.
-  Max Weight continua 100% (MM tem 20%); o peso de L&S oscila entre perfis
-  (11%, 5%, 0, 0, 0, 11%, 15%, 19%, 18%, 3%).
-- Curvaturas diferentes por bucket (RF 0,5 / Alt 1,2 / RV 1,2): a soma bruta cai
-  para 0,71–0,93 nos perfis P2–P9 e o motor renormaliza, então o γ efetivo difere
-  do cadastrado.
-- Max RC só preenchido em Bitcoin (15%) e nunca atinge o limite (RC máx ~10%).
-- RC realizado de RF fica ~10 p.p. abaixo do alvo nos perfis intermediários; o motor
-  só checa vol e limites para dizer que convergiu, não o erro de RC.
+Pacote interno da Persevera: leitura e carga de dados (providers → Postgres),
+renda fixa, pesquisa quant (factor investing, risk budgeting) e integrações
+(Fibery, custodiantes). Visão dos módulos no [README](README.md).
 
 ## Regras de trabalho
-- Não escrever nem apagar nada no Fibery; exclusões de campos eu faço manualmente.
 - Antes de alterar código, explicar o diagnóstico e propor a mudança.
+- Não escrever nem apagar nada no Fibery; exclusões de campos são feitas manualmente.
+- Commit e push só quando pedido; mudanças vão por branch + PR, nunca direto no `main`.
+
+## Ambiente
+- Testes e scripts: `.venv/Scripts/python.exe` (Python 3.12). O `python` do PATH
+  é outro (3.15) e não tem numpy/pandas/pytest.
+- Testes: `.venv/Scripts/python.exe -m pytest -q tests/`
+- Produção: os jobs agendados (`run_*.bat`) rodam no PC Bloomberg, com
+  Python 3.11, **pandas 2.2.2 e numpy 1.26**. Código com datas ou tipos numpy
+  deve funcionar também nessas versões. Uma mudança só chega lá depois de o
+  pacote ser reinstalado nessa máquina.
+
+## Banco e n8n
+- Vários providers de `persevera_tools/data/providers` têm uma réplica em
+  workflow do n8n que grava nas mesmas tabelas. Renomear tabela, mudar campo ou
+  chave exige atualizar código **e** workflow. Mapa em
+  [docs/data/providers-tabelas-n8n.md](docs/data/providers-tabelas-n8n.md).
+- `renda_fixa_historico` (antes `credito_privado_historico`) é compartilhada por
+  vários providers; a chave do upsert inclui `source`.
+
+## Documentação
+- `docs/` guarda o *porquê*: aprendizados, diagnósticos e propostas, com
+  `Status` e `Atualizado em`. Convenções em [docs/README.md](docs/README.md).
+- Contexto específico de um módulo fica num `CLAUDE.md` dentro da pasta dele
+  (ex.: `persevera_tools/quant_research/risk_budgeting_spectrum/CLAUDE.md`).
