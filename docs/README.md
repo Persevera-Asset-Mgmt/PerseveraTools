@@ -21,7 +21,7 @@ mostraram e o que ainda está em aberto.
 | [factor_investing/estilos-longo-prazo.md](factor_investing/estilos-longo-prazo.md) | Aprendizado | Backtests de Value, Quality, Momentum e Risk; origem das quebras de performance |
 | [factor_investing/ls-beta-neutro.md](factor_investing/ls-beta-neutro.md) | Implementado (PR #14) | Long/short beta-neutro |
 | [factor_investing/universo-por-indice.md](factor_investing/universo-por-indice.md) | Implementado (PR #22; Hub #17) | Universo pelos membros de índices B3 em vez de ADTV fixo |
-| [factor_investing/idade-dos-componentes.md](factor_investing/idade-dos-componentes.md) | Implementado (PR a abrir) | Limite de idade dos componentes por `Frequência` (Diário, Consenso, Trimestral) |
+| [factor_investing/idade-dos-componentes.md](factor_investing/idade-dos-componentes.md) | Implementado (PR #26) | Limite de idade dos componentes por `Frequência` (Diário, Consenso, Trimestral) |
 | [factor_zoo/problemas-conhecidos.md](factor_zoo/problemas-conhecidos.md) | Aprendizado | Preços errados, carga da composição de índices (PRs #15–#18, #21, #22), tickers antigos |
 | [data/providers-tabelas-n8n.md](data/providers-tabelas-n8n.md) | Aprendizado | Tabela de destino de cada provider, chaves do upsert e workflows do n8n que replicam a carga |
 | [risk_budgeting_spectrum/calibracao.md](risk_budgeting_spectrum/calibracao.md) | Aprendizado | Calibração do Motor RBS no Fibery e problemas conhecidos |

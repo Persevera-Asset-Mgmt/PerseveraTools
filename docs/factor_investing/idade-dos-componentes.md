@@ -1,7 +1,7 @@
 # Limite de idade dos componentes
 
 - **Status:** Implementado (`BacktestConfig.max_age_by_frequency` /
-  `component_max_age_days`, PR a abrir)
+  `component_max_age_days`, PR #26)
 - **Atualizado em:** 2026-11-04
 
 ## Motivação
