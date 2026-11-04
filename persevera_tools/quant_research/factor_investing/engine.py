@@ -91,21 +91,21 @@ def _daily_portfolio_return(
             }
         )
 
-    w = aligned["w"]
-    rets = aligned["r"]
-    target_long = float(w_held[w_held > 0].sum())
-    target_short = float(w_held[w_held < 0].sum())
-    w_adj = pd.Series(0.0, index=w.index, dtype=float)
+    w_adj = _rescale_legs(w_held, aligned.index)
+    return float((w_adj * aligned["r"]).sum()), events
 
-    long_w = w[w > 0]
-    short_w = w[w < 0]
-    if not long_w.empty and target_long != 0:
-        w_adj.loc[long_w.index] = long_w / long_w.sum() * target_long
-    if not short_w.empty and target_short != 0:
-        w_adj.loc[short_w.index] = short_w / short_w.sum() * target_short
-    if long_w.empty and short_w.empty:
-        return float("nan"), events
-    return float((w_adj * rets).sum()), events
+
+def _rescale_legs(weights: pd.Series, kept: pd.Index) -> pd.Series:
+    """Weights on ``kept``, each leg rescaled to its gross in ``weights``."""
+    sub = weights.reindex(kept).fillna(0.0)
+    out = pd.Series(0.0, index=kept, dtype=float)
+    for full_leg, leg in (
+        (weights[weights > 0], sub[sub > 0]),
+        (weights[weights < 0], sub[sub < 0]),
+    ):
+        if not leg.empty and float(full_leg.sum()) != 0:
+            out.loc[leg.index] = leg / leg.sum() * float(full_leg.sum())
+    return out
 
 
 def _traded_notional(prev_w: Optional[pd.Series], curr_w: pd.Series) -> float:
@@ -380,6 +380,49 @@ def _form_rebalance_books(
     return scores_df, weights_df, rebals_df, event_rows
 
 
+def _drift_session(
+    weights: pd.Series,
+    asset_returns: pd.Series,
+    *,
+    as_of: Optional[pd.Timestamp] = None,
+) -> tuple[pd.Series, pd.Series, float, list[dict[str, Any]]]:
+    """
+    One session for drifting holdings: close names without a return, then P&L.
+
+    A held name with no return (price gone past ``price_ffill_limit``) leaves the
+    book for good, as if sold at its last price; its weight goes to the rest of
+    its leg. Returns the start-of-session weights, their returns, the portfolio
+    return and diagnostic events.
+    """
+    events: list[dict[str, Any]] = []
+    r = asset_returns.reindex(weights.index)
+    missing = r[r.isna()].index
+    if len(missing):
+        for code in missing:
+            events.append(
+                {
+                    "date": as_of,
+                    "code": str(code),
+                    "event": "price_gap",
+                    "detail": "held name with missing return after price ffill; position closed",
+                }
+            )
+        events.append(
+            {
+                "date": as_of,
+                "code": ",".join(str(c) for c in sorted(missing)),
+                "event": "renorm",
+                "detail": f"dropped {len(missing)} name(s); renormalized remaining legs",
+            }
+        )
+        weights = _rescale_legs(weights, r.dropna().index)
+        weights = weights[weights != 0.0]
+        r = r.reindex(weights.index)
+    if weights.empty:
+        return weights, r, float("nan"), events
+    return weights, r, float((weights * r).sum()), events
+
+
 def _simulate_holdings_pnl(
     *,
     prices: pd.DataFrame,
@@ -388,43 +431,61 @@ def _simulate_holdings_pnl(
     end_date: pd.Timestamp,
     initial_nav: float,
     borrow_rate: float = 0.0,
-    trading_cost_by_date: Optional[Mapping[Any, float]] = None,
-) -> tuple[pd.Series, pd.Series, pd.DataFrame, list[dict[str, Any]], int, int]:
-    """Simulate daily P&L from rebalance weights; return nav/returns/costs/events/counters."""
+    trading_cost_bps: float = 0.0,
+    weight_drift: bool = True,
+) -> tuple[
+    pd.Series, pd.Series, pd.DataFrame, list[dict[str, Any]], int, int, dict[pd.Timestamp, float]
+]:
+    """
+    Simulate daily P&L from rebalance weights.
+
+    ``weight_drift=True`` holds the book between rebalances: weights move with
+    returns, the rebalance trades from the drifted weights to the new target,
+    and borrow accrues on the drifted short leg. ``False`` resets the book to its
+    target every session (no cost for that), trading target to target.
+
+    Returns nav, returns, daily costs, events, holding-day and renorm-day
+    counters, and the two-way traded notional ``sum(|Δw|)`` on each rebalance.
+    """
     trading_index = prices.index[(prices.index >= start_date) & (prices.index <= end_date)]
     daily_weights = weights_df.reindex(trading_index).ffill()
     asset_returns = prices.pct_change(fill_method=None)
-    cost_map = {
-        pd.Timestamp(k).normalize(): float(v)
-        for k, v in dict(trading_cost_by_date or {}).items()
-        if v is not None and pd.notna(v)
-    }
+    rebalances = set(weights_df.index)
 
     strategy_returns = pd.Series(index=trading_index, dtype=float, name="strategy_return")
     trading_costs = pd.Series(0.0, index=trading_index, dtype=float, name="trading_cost")
     borrow_costs = pd.Series(0.0, index=trading_index, dtype=float, name="borrow_cost")
     event_rows: list[dict[str, Any]] = []
+    traded_by_date: dict[pd.Timestamp, float] = {}
     n_days_holdings = 0
     n_days_renorm = 0
+    holdings = pd.Series(dtype=float)  # drift: weights after the previous close
+    prev_target: Optional[pd.Series] = None
 
     for dt in trading_index:
         pos = trading_index.get_loc(dt)
-        dt_norm = pd.Timestamp(dt).normalize()
-        trading_cost = float(cost_map.get(dt_norm, 0.0))
 
         w = pd.Series(dtype=float)
-        if isinstance(pos, int) and pos > 0:
+        if weight_drift:
+            w = holdings
+        elif isinstance(pos, int) and pos > 0:
             w_raw = daily_weights.loc[trading_index[pos - 1]]
             if isinstance(w_raw, pd.Series):
                 w = w_raw[w_raw.notna() & (w_raw != 0.0)]
 
         borrow_cost = 0.0
         port_ret = float("nan")
+        end_weights = pd.Series(dtype=float)
         if not w.empty:
             n_days_holdings += 1
-            port_ret, day_events = _daily_portfolio_return(
-                w, asset_returns.loc[dt], as_of=dt
-            )
+            if weight_drift:
+                w, r, port_ret, day_events = _drift_session(
+                    w, asset_returns.loc[dt], as_of=dt
+                )
+            else:
+                port_ret, day_events = _daily_portfolio_return(
+                    w, asset_returns.loc[dt], as_of=dt
+                )
             if any(e["event"] == "renorm" for e in day_events):
                 n_days_renorm += 1
             event_rows.extend(day_events)
@@ -432,6 +493,24 @@ def _simulate_holdings_pnl(
                 short_leg = w[w < 0]
                 if not short_leg.empty:
                     borrow_cost = float((-short_leg).sum()) * float(borrow_rate) / 252.0
+            if weight_drift and not w.empty:
+                end_weights = w * (1.0 + r) / (1.0 + port_ret - borrow_cost)
+
+        trading_cost = 0.0
+        if dt in rebalances:
+            target = weights_df.loc[dt]
+            target = target[target.notna() & (target != 0.0)]
+            reference = end_weights if weight_drift else prev_target
+            traded = _traded_notional(
+                reference if reference is not None and not reference.empty else None,
+                target,
+            )
+            traded_by_date[pd.Timestamp(dt)] = traded
+            trading_cost = traded * float(trading_cost_bps) / 10_000.0
+            prev_target = target
+            holdings = target
+        elif weight_drift:
+            holdings = end_weights
 
         if pd.isna(port_ret):
             if w.empty and trading_cost == 0.0:
@@ -456,7 +535,35 @@ def _simulate_holdings_pnl(
         {"trading_cost": trading_costs, "borrow_cost": borrow_costs}
     )
     costs_df.index.name = "date"
-    return nav, strategy_returns, costs_df, event_rows, n_days_holdings, n_days_renorm
+    return (
+        nav,
+        strategy_returns,
+        costs_df,
+        event_rows,
+        n_days_holdings,
+        n_days_renorm,
+        traded_by_date,
+    )
+
+
+def _apply_realized_trades(
+    rebals_df: pd.DataFrame,
+    traded_by_date: Mapping[pd.Timestamp, float],
+    trading_cost_bps: float,
+) -> pd.DataFrame:
+    """Overwrite rebalance turnover/notional/cost with what the simulation traded."""
+    if rebals_df.empty or not traded_by_date:
+        return rebals_df
+    out = rebals_df.copy()
+    traded = pd.Series(traded_by_date, dtype=float).reindex(out.index)
+    has = traded.notna()
+    out.loc[has, "traded_notional"] = traded[has]
+    out.loc[has, "trading_cost"] = traded[has] * float(trading_cost_bps) / 10_000.0
+    if "turnover" in out.columns:
+        # First book is a deployment from cash: turnover stays NaN, as before.
+        keep_nan = out["turnover"].isna()
+        out.loc[has & ~keep_nan, "turnover"] = 0.5 * traded[has & ~keep_nan]
+    return out
 
 
 def _gross_nav_from_net(
@@ -518,7 +625,8 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     2. Load historical ``factor_zoo`` panels via ``get_descriptors``
     3. On each rebalance date: recent price and ADTV filter → PIT snapshot
        (stale components blanked) → score → weights
-    4. Hold weights until the next rebalance; compute daily P&L from ``price_field``
+    4. Hold the book until the next rebalance (weights drift with returns unless
+       ``weight_drift=False``); compute daily P&L from ``price_field``
     5. Debit trading costs on rebalance closes and borrow on overnight shorts
     """
     definitions = load_factor_definitions()
@@ -563,21 +671,25 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         beta_panel=panels.get("beta"),
         membership=panels.get("membership"),
     )
-    nav, strategy_returns, costs_df, hold_events, n_days_holdings, n_days_renorm = (
-        _simulate_holdings_pnl(
-            prices=prices,
-            weights_df=weights_df,
-            start_date=config.start_date,
-            end_date=config.end_date,
-            initial_nav=config.initial_nav,
-            borrow_rate=config.borrow_rate,
-            trading_cost_by_date=(
-                rebals_df["trading_cost"].to_dict()
-                if not rebals_df.empty and "trading_cost" in rebals_df.columns
-                else None
-            ),
-        )
+    (
+        nav,
+        strategy_returns,
+        costs_df,
+        hold_events,
+        n_days_holdings,
+        n_days_renorm,
+        traded_by_date,
+    ) = _simulate_holdings_pnl(
+        prices=prices,
+        weights_df=weights_df,
+        start_date=config.start_date,
+        end_date=config.end_date,
+        initial_nav=config.initial_nav,
+        borrow_rate=config.borrow_rate,
+        trading_cost_bps=config.trading_cost_bps,
+        weight_drift=config.weight_drift,
     )
+    rebals_df = _apply_realized_trades(rebals_df, traded_by_date, config.trading_cost_bps)
     diagnostics, diag_summary = _build_diagnostics(
         rebals_df,
         rebal_events + hold_events,
@@ -602,6 +714,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             "one_class_per_issuer": config.one_class_per_issuer,
             "trading_cost_bps": config.trading_cost_bps,
             "borrow_rate": config.borrow_rate,
+            "weight_drift": config.weight_drift,
             "beta_neutral": config.beta_neutral,
             "universe_index": list(config.universe_index) if config.universe_index else None,
         }

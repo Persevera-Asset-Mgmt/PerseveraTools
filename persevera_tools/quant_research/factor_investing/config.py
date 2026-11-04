@@ -88,6 +88,11 @@ class BacktestConfig:
         ``risk_free_rate``), accrued daily as
         ``short_gross * borrow_rate / 252``. Long-only is unaffected.
 
+    Holding between rebalances: with ``weight_drift=True`` (default) the book
+    is held, so weights move with returns; turnover, trading cost and borrow
+    use the drifted weights. ``False`` resets the book to its target every
+    session at no cost (the engine before weight drift), for comparison.
+
     Beta neutrality (``long_short`` only): with ``beta_neutral=True`` each
     rebalance resizes the legs so that ``gross_long * beta_long ==
     gross_short * beta_short`` while ``gross_long + gross_short`` stays 2.
@@ -125,6 +130,7 @@ class BacktestConfig:
     beta_field: str = "beta"
     universe_index: Optional[Union[str, Sequence[str]]] = None
     index_max_age_days: int = 10
+    weight_drift: bool = True
 
     def __post_init__(self) -> None:
         self.start_date = _to_timestamp(self.start_date)

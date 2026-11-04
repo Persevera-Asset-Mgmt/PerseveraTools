@@ -22,6 +22,10 @@ Liquidity ficou de fora por ser de curto prazo.
 
 ## Resultados
 
+Números do engine com pesos fixos entre rebalanceamentos, anterior ao drift
+(`weight_drift=False` reproduz). Com drift os retornos caem 0,3–1,0 p.p. no
+long-only; ver [diagnostico-engine.md](diagnostico-engine.md).
+
 | Estilo | LO ret / Sharpe / MDD | L/S ret / Sharpe / MDD | β L/S vs Ibov |
 |---|---|---|---|
 | Value | 13,6% / 0,52 / −56% | 9,2% / 0,58 / −49% | 0,03 |
