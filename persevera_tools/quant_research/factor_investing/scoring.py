@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Mapping, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 
 
@@ -71,38 +72,75 @@ def calculate_factor_exposure(
     return scores
 
 
-def snapshot_components(
+def last_values_with_age(
     panel: pd.DataFrame,
     as_of: pd.Timestamp,
     components: Sequence[str],
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Build a codes × components DataFrame using last values on or before ``as_of``.
+    Last value on or before ``as_of`` and its age in calendar days.
 
-    ``panel`` columns are MultiIndex ``(ticker, descriptor)``.
+    ``panel`` columns are MultiIndex ``(ticker, descriptor)``. Returns two
+    codes × components frames (values, ages) with the same shape; both are NaN
+    where a ticker never printed the component.
     """
+    empty = pd.DataFrame(columns=list(components))
     if panel.empty:
-        return pd.DataFrame(columns=list(components))
-
-    hist = panel.loc[:as_of]
-    if hist.empty:
-        return pd.DataFrame(columns=list(components))
-
-    snapshot = hist.ffill().iloc[-1]
-    if not isinstance(snapshot.index, pd.MultiIndex):
+        return empty, empty.copy()
+    if not isinstance(panel.columns, pd.MultiIndex):
         raise TypeError(
             "Expected MultiIndex columns (ticker, descriptor) on the factor panel"
         )
 
-    frames: dict[str, pd.Series] = {}
-    for comp in components:
-        try:
-            frames[comp] = snapshot.xs(comp, level=-1)
-        except KeyError:
-            continue
-    if not frames:
-        return pd.DataFrame(columns=list(components))
-    return pd.DataFrame(frames)
+    hist = panel.loc[:as_of]
+    hist = hist.loc[:, hist.columns.get_level_values(-1).isin(list(components))]
+    if hist.empty or hist.shape[1] == 0:
+        return empty, empty.copy()
+
+    vals = hist.to_numpy(dtype=float)
+    last_pos = np.where(~np.isnan(vals), np.arange(len(hist))[:, None], -1).max(axis=0)
+    has = last_pos >= 0
+    last = np.full(vals.shape[1], np.nan)
+    last[has] = vals[last_pos[has], np.flatnonzero(has)]
+    age = np.full(vals.shape[1], np.nan)
+    age[has] = (pd.Timestamp(as_of) - hist.index[last_pos[has]]).days
+
+    present = set(hist.columns.get_level_values(-1))
+    order = [c for c in components if c in present]
+    values = pd.Series(last, index=hist.columns).unstack(level=-1).reindex(columns=order)
+    ages = pd.Series(age, index=hist.columns).unstack(level=-1).reindex(columns=order)
+    return values, ages
+
+
+def apply_max_age(
+    values: pd.DataFrame,
+    ages: pd.DataFrame,
+    max_age_days: Optional[Mapping[str, int]] = None,
+) -> pd.DataFrame:
+    """Blank values older than their component's limit; components without one pass."""
+    if not max_age_days or values.empty:
+        return values
+    limits = pd.Series(
+        {c: float(max_age_days.get(c, np.inf)) for c in values.columns}, dtype=float
+    )
+    return values.where(~ages.gt(limits, axis=1))
+
+
+def snapshot_components(
+    panel: pd.DataFrame,
+    as_of: pd.Timestamp,
+    components: Sequence[str],
+    max_age_days: Optional[Mapping[str, int]] = None,
+) -> pd.DataFrame:
+    """
+    Build a codes × components DataFrame using last values on or before ``as_of``.
+
+    ``panel`` columns are MultiIndex ``(ticker, descriptor)``. With
+    ``max_age_days`` (``{component: calendar days}``) a value older than its
+    component's limit is treated as missing.
+    """
+    values, ages = last_values_with_age(panel, as_of, components)
+    return apply_max_age(values, ages, max_age_days)
 
 
 def snapshot_series(

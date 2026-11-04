@@ -22,10 +22,11 @@ Typical usage::
     print(result.summary)
 """
 
-from .config import BacktestConfig
+from .config import DEFAULT_MAX_AGE_BY_FREQUENCY, BacktestConfig
 from .definitions import (
     clear_factor_definitions_cache,
     get_codes_by_denomination,
+    get_component_max_age,
     get_factor_components,
     get_factor_options,
     get_higher_is_better_map,
@@ -35,14 +36,16 @@ from .definitions import (
 from .engine import run_backtest
 from .portfolio import beta_neutralize, scores_to_weights
 from .result import BacktestDiagnostics, BacktestResult
-from .scoring import calculate_factor_exposure
+from .scoring import calculate_factor_exposure, snapshot_components
 
 __all__ = [
     "BacktestConfig",
+    "DEFAULT_MAX_AGE_BY_FREQUENCY",
     "BacktestResult",
     "BacktestDiagnostics",
     "run_backtest",
     "calculate_factor_exposure",
+    "snapshot_components",
     "scores_to_weights",
     "beta_neutralize",
     "load_factor_definitions",
@@ -50,6 +53,7 @@ __all__ = [
     "clear_factor_definitions_cache",
     "get_factor_options",
     "get_factor_components",
+    "get_component_max_age",
     "get_higher_is_better_map",
     "get_codes_by_denomination",
 ]

@@ -4,13 +4,36 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Literal, Optional, Sequence, Union
+from typing import Literal, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 
 Construction = Literal["long_only", "long_short"]
 SelectionMode = Literal["quantile", "top_n"]
 DateLike = Union[str, date, datetime, pd.Timestamp]
+
+# Calendar days of history loaded before ``start_date``; also the ceiling for
+# component age limits, so every rebalance sees the same staleness window.
+COMPONENT_LOOKBACK_DAYS = 365
+
+# Calendar-day age limits by Fibery ``Frequência``. Daily covers long holidays,
+# consensus drops a broker estimate nobody refreshes, quarterly allows a late
+# release after the Q3-to-annual gap (~135 days).
+DEFAULT_MAX_AGE_BY_FREQUENCY: dict[str, int] = {
+    "Diário": 10,
+    "Consenso": 30,
+    "Trimestral": 200,
+}
+
+
+def _validate_age_map(name: str, ages: Mapping[str, int]) -> dict[str, int]:
+    out = {str(k): int(v) for k, v in ages.items()}
+    for key, days in out.items():
+        if not 0 <= days <= COMPONENT_LOOKBACK_DAYS:
+            raise ValueError(
+                f"{name}[{key!r}] must be in [0, {COMPONENT_LOOKBACK_DAYS}] days"
+            )
+    return out
 
 
 def _to_timestamp(value: DateLike) -> pd.Timestamp:
@@ -30,9 +53,14 @@ class BacktestConfig:
     ``denomination`` (default ``"BRL"``). On each rebalance a name is investable
     only when ``price_field`` is still printing after a forward-fill of at most
     ``price_ffill_limit`` business days, and ``adtv_field >= adtv_min`` using an
-    ADTV print no older than that same limit. Factor components may keep their
-    last value with no age limit. Pass ``codes`` to restrict further (this skips
-    the ``denomination`` filter).
+    ADTV print no older than that same limit. Pass ``codes`` to restrict further
+    (this skips the ``denomination`` filter).
+
+    Component staleness: a factor value older than its limit (calendar days)
+    is treated as missing. Limits come from the component's Fibery
+    ``Frequência`` via ``max_age_by_frequency`` (default
+    ``DEFAULT_MAX_AGE_BY_FREQUENCY``); ``component_max_age_days`` overrides
+    single components. All limits must be within ``COMPONENT_LOOKBACK_DAYS``.
 
     Index universe: ``universe_index`` (a ``b3_index_composition`` field such as
     ``"IBX100"``, or several, e.g. ``("IBX100", "SMLL")``) replaces the
@@ -91,6 +119,8 @@ class BacktestConfig:
     initial_nav: float = 1.0
     trading_cost_bps: float = 0.0
     borrow_rate: float = 0.0
+    max_age_by_frequency: Optional[Mapping[str, int]] = None
+    component_max_age_days: Optional[Mapping[str, int]] = None
     beta_neutral: bool = False
     beta_field: str = "beta"
     universe_index: Optional[Union[str, Sequence[str]]] = None
@@ -153,3 +183,11 @@ class BacktestConfig:
                 raise ValueError("codes cannot be empty when provided")
         if self.rebalance_dates is not None:
             self.rebalance_dates = tuple(_to_timestamp(d) for d in self.rebalance_dates)
+        self.max_age_by_frequency = _validate_age_map(
+            "max_age_by_frequency",
+            {**DEFAULT_MAX_AGE_BY_FREQUENCY, **dict(self.max_age_by_frequency or {})},
+        )
+        if self.component_max_age_days is not None:
+            self.component_max_age_days = _validate_age_map(
+                "component_max_age_days", self.component_max_age_days
+            )
