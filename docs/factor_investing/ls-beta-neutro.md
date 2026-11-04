@@ -37,7 +37,9 @@ ao ano e o drawdown piora; ver [diagnostico-engine.md](diagnostico-engine.md).
 | Risk | 0,3% → 16,1% | 0,01 → 0,85 | −93% → −51% | −0,85 → −0,02 |
 
 Risk fica em média 1,45 comprado / 0,55 vendido (β_L 0,51, β_S 1,35).
-Quality ainda inclui o dia de GOLL54; sem ele, Sharpe 0,96 e MDD −51%.
+Quality ainda inclui o dia de GOLL54 (preço correto, papel em reestruturação);
+sem ele, Sharpe 0,96 e MDD −51%. No universo por índice, padrão desde o PR #30,
+o papel já não está.
 
 ## Em aberto
 

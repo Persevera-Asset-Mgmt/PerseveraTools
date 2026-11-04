@@ -14,12 +14,15 @@ Typical usage::
         style="Momentum",
         construction="long_only",
         rebalance_freq="BME",
-        adtv_min=8_000_000,
         trading_cost_bps=10.0,
         borrow_rate=0.0,
     )
     result = run_backtest(config)
     print(result.summary)
+
+The default universe is the IBX100 ∪ SMLL members (``universe_index``) with no
+ADTV floor. For the whole BRL pool pass ``universe_index=None`` together with an
+``adtv_min`` such as ``8_000_000``.
 """
 
 from .config import DEFAULT_MAX_AGE_BY_FREQUENCY, BacktestConfig

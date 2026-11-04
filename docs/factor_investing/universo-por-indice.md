@@ -1,22 +1,35 @@
 # Universo pelos membros de índices B3
 
 - **Status:** Implementado (`BacktestConfig.universe_index`, PR #22; Hub:
-  Persevera-Asset-Mgmt/PerseveraHub#17)
-- **Atualizado em:** 2026-10-29
+  Persevera-Asset-Mgmt/PerseveraHub#17). Padrão do `BacktestConfig` desde o
+  PR #30: `universe_index=("IBX100", "SMLL")`, `adtv_min=0`.
+- **Atualizado em:** 2026-11-04
 
 ## Motivação
 
-O filtro atual (ADTV de 21 dias ≥ R$8 mi, valor fixo em reais nominais) deixa
+O filtro antigo (ADTV de 21 dias ≥ R$8 mi, valor fixo em reais nominais) deixa
 entrar empresas em situação especial que giram muito, como GOLL54 e AZUL54
 durante as reestruturações, e fica mais frouxo com a inflação (R$8 mi em 2010
 não é R$8 mi em 2026). As metodologias dos índices B3 já filtram liquidez e
 situação especial.
 
+Com pesos com drift (PR #29) isso deixou de ser só uma distorção: vendido em
+GOLL54 durante a alta de jun/2025, o Quality L/S beta-neutro no universo por
+ADTV perde tudo (drawdown de −110%). Os preços estão corretos (confirmado em
+2026-11-04), então a perda é real; a saída é não ter o papel no universo. Por
+isso o universo por índice virou o padrão.
+
 ## Uso
 
 ```python
-BacktestConfig(..., universe_index=("IBX100", "SMLL"), adtv_min=0)
+BacktestConfig(...)  # padrão: universe_index=("IBX100", "SMLL"), adtv_min=0
+BacktestConfig(..., universe_index=None, adtv_min=8_000_000)  # pool por denominação
 ```
+
+- Antes de 19/06/2008 (início do SMLL) o padrão é só o IBX100, e antes de
+  03/01/2000 não há composição: o backtest falha.
+- Com `universe_index=None`, defina `adtv_min`; com 0, entram papéis sem
+  liquidez.
 
 - `universe_index`: um campo da `b3_index_composition` (`IBOV`, `IBX100`,
   `IBX50`, `IBRA`, `SMLL`, `MLCX`) ou vários (união). Substitui o pool por
@@ -51,7 +64,9 @@ Tela Factor Investing (PerseveraHub#17, persevera-tools na revisão
 ## Resultados (2010-01-01 a 2026-10-27)
 
 Top 20%, rebalanceamento mensal, 10 bps de custo; L/S beta-neutro.
-Universo IBX100 ∪ SMLL sem filtro de ADTV contra ADTV ≥ R$8 mi:
+Universo IBX100 ∪ SMLL sem filtro de ADTV contra ADTV ≥ R$8 mi. Rodado em
+2026-10-29, antes do limite de idade (PR #26) e do drift (PR #29); os números
+com o engine atual estão em [diagnostico-engine.md](diagnostico-engine.md).
 
 | Estilo | Livro | ADTV: ret / Sharpe / MDD | Índice: ret / Sharpe / MDD | Nomes (ADTV → índice) |
 |---|---|---|---|---|
@@ -64,10 +79,10 @@ Universo IBX100 ∪ SMLL sem filtro de ADTV contra ADTV ≥ R$8 mi:
 | Risk | LO | 13,4% / 0,87 / −37% | 13,3% / 0,88 / −37% | 22 → 27 |
 | Risk | L/S | 16,0% / 0,85 / −51% | 20,1% / 1,30 / −33% | 44 → 54 |
 
-- As quebras de dado somem: em 12/06/2025 a Quality L/S passa de −57% no dia
-  para +0,7%, a Risk L/S de −35% para +0,8%; em 09/01/2026 a Momentum L/S de
-  −7,8% para +0,4%.
+- As quebras dos papéis em reestruturação somem: em 12/06/2025 a Quality L/S
+  passa de −57% no dia para +0,7%, a Risk L/S de −35% para +0,8%; em
+  09/01/2026 a Momentum L/S de −7,8% para +0,4%.
 - Long-only praticamente igual; giro menor (Quality 11% → 6% por mês).
 - Universo médio de 147 membros (113 a 202).
-- A comparação mistura dois efeitos: tirar os dados ruins e mudar o tamanho
-  do universo. Momentum L/S teve drawdown maior (−51% contra −44%).
+- A comparação mistura dois efeitos: tirar os papéis em reestruturação e mudar
+  o tamanho do universo. Momentum L/S teve drawdown maior (−51% contra −44%).

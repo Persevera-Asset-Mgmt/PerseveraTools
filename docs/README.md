@@ -20,9 +20,9 @@ mostraram e o que ainda está em aberto.
 |---|---|---|
 | [factor_investing/estilos-longo-prazo.md](factor_investing/estilos-longo-prazo.md) | Aprendizado | Backtests de Value, Quality, Momentum e Risk; origem das quebras de performance |
 | [factor_investing/ls-beta-neutro.md](factor_investing/ls-beta-neutro.md) | Implementado (PR #14) | Long/short beta-neutro |
-| [factor_investing/universo-por-indice.md](factor_investing/universo-por-indice.md) | Implementado (PR #22; Hub #17) | Universo pelos membros de índices B3 em vez de ADTV fixo |
+| [factor_investing/universo-por-indice.md](factor_investing/universo-por-indice.md) | Implementado (PR #22; Hub #17); padrão desde o PR #30 | Universo pelos membros de índices B3 em vez de ADTV fixo |
 | [factor_investing/idade-dos-componentes.md](factor_investing/idade-dos-componentes.md) | Implementado (PR #26) | Limite de idade dos componentes por `Frequência` (Diário, Consenso, Trimestral) |
-| [factor_investing/diagnostico-engine.md](factor_investing/diagnostico-engine.md) | Proposta (item 1 implementado, PR #29) | Problemas do engine e medição de drift e lag: pesos com drift (feito), CDI no L/S, cobertura mínima, defasagem de execução |
-| [factor_zoo/problemas-conhecidos.md](factor_zoo/problemas-conhecidos.md) | Aprendizado | Preços errados, carga da composição de índices (PRs #15–#18, #21, #22), tickers antigos, mesmo emissor em raízes diferentes, BDRs no universo |
+| [factor_investing/diagnostico-engine.md](factor_investing/diagnostico-engine.md) | Proposta (itens feitos nos PRs #29 e #30) | Problemas do engine e medição de drift, lag e universo por índice: pesos com drift (feito), CDI no L/S, cobertura mínima, defasagem de execução |
+| [factor_zoo/problemas-conhecidos.md](factor_zoo/problemas-conhecidos.md) | Aprendizado | Saltos de papéis em reestruturação (preços corretos), carga da composição de índices (PRs #15–#18, #21, #22), tickers antigos, mesmo emissor em raízes diferentes, BDRs no universo |
 | [data/providers-tabelas-n8n.md](data/providers-tabelas-n8n.md) | Aprendizado | Tabela de destino de cada provider, chaves do upsert e workflows do n8n que replicam a carga |
 | [risk_budgeting_spectrum/calibracao.md](risk_budgeting_spectrum/calibracao.md) | Aprendizado | Calibração do Motor RBS no Fibery e problemas conhecidos |

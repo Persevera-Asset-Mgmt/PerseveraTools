@@ -251,7 +251,10 @@ def test_rebalance_blanks_stale_values_and_reports_them():
     comp[(tickers[0], "fcf_yield_fwd")] = {"2024-01-02": 99.0}  # 87 dias no rebalance
     comp_panel = _panel(comp)
 
-    cfg = BacktestConfig(start_date="2024-01-01", end_date="2024-03-29", components=["fcf_yield_fwd"])
+    cfg = BacktestConfig(
+        start_date="2024-01-01", end_date="2024-03-29", components=["fcf_yield_fwd"],
+        universe_index=None,
+    )
     scores, _, rebals, _ = _form_rebalance_books(
         cfg,
         rebalance_dates=pd.DatetimeIndex([pd.Timestamp("2024-03-29")]),
@@ -282,7 +285,7 @@ def _beta_neutral_books(max_age_days):
     betas[(tickers[-1], "beta")] = {"2024-01-02": 5.0}  # maior score (perna comprada), beta de 87 dias
     cfg = BacktestConfig(
         start_date="2024-01-01", end_date="2024-03-29", components=["momentum_6m"],
-        construction="long_short", beta_neutral=True,
+        construction="long_short", beta_neutral=True, universe_index=None,
     )
     _, weights, rebals, _ = _form_rebalance_books(
         cfg,

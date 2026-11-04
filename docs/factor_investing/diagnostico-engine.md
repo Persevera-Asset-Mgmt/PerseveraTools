@@ -1,6 +1,7 @@
 # Diagnóstico do engine de backtest
 
-- **Status:** Proposta (item 1 implementado, PR #29)
+- **Status:** Proposta (item 1 implementado, PR #29; universo por índice como
+  padrão, PR #30)
 - **Atualizado em:** 2026-11-04
 
 Leitura do engine (`persevera_tools/quant_research/factor_investing`) feita em
@@ -111,12 +112,14 @@ ser menor que 5 pregões.
 - **Limite de idade dos componentes e do beta:** PR #26
   ([idade-dos-componentes.md](idade-dos-componentes.md)).
 - **ADTV mínimo nominal fixo** (R$8 mi em 2010 não é R$8 mi em 2026; o
-  universo líquido ia de 76 nomes em 2010 a 154 em 2020): o universo por
-  índice é a alternativa (PR #22, [universo-por-indice.md](universo-por-indice.md)).
+  universo líquido ia de 76 nomes em 2010 a 154 em 2020): universo por índice
+  (PR #22), padrão desde o PR #30 ([universo-por-indice.md](universo-por-indice.md)).
 - **Sem testes:** testes offline do limite de idade (PR #26), da simulação de
   P&L com e sem drift (`tests/test_factor_investing_simulation.py`) e CI em
   dois ambientes (PR #27). Ainda faltam testes de `portfolio` e do scoring.
 - **Pesos com drift (item 1):** PR #29.
+- **Papéis em reestruturação no universo** (GOLL54, AZUL54): universo por índice
+  como padrão, PR #30.
 
 ## Medição: drift e lag
 
@@ -124,9 +127,12 @@ Mesma configuração de [estilos-longo-prazo.md](estilos-longo-prazo.md)
 (2010-01-01 a 2026-10-27, quintil 20%, `BME`, ADTV ≥ R$8 mi, 10 bps); L/S
 beta-neutro. As carteiras são as do engine; um protótipo resimulou cada uma
 (correlação diária de 0,9999 com o engine na variante base). Os retornos de
-GOLL54 e AZUL54 nas janelas de preço errado foram zerados nas quatro
-variantes ([problemas-conhecidos.md](../factor_zoo/problemas-conhecidos.md)).
-Retorno anual em %, Sharpe entre parênteses:
+GOLL54 e AZUL54 nas janelas dos saltos foram zerados nas quatro variantes,
+porque na época eram tratados como preço errado. Os preços estão corretos
+(confirmado em 2026-11-04), então esta tabela é um cenário sem esses dois
+papéis, para isolar o efeito do drift e do lag; o resultado com o universo
+padrão está em "Universo por índice com drift", abaixo. Retorno anual em %,
+Sharpe entre parênteses:
 
 | Estilo | Livro | Base (pesos fixos) | Lag 1 pregão | Drift | Drift + lag |
 |---|---|---|---|---|---|
@@ -143,19 +149,46 @@ Retorno anual em %, Sharpe entre parênteses:
   −2,2 p.p. no L/S, com Sharpe 0,13–0,17 menor e drawdown 5–7 p.p. pior no L/S
   (a perna vendida passa a pesar mais quando os papéis sobem).
 - Lag: −0,6 a +1,1 p.p., sinal variável. Drift e lag praticamente se somam.
-- **Preço errado com drift:** sem zerar GOLL54 e AZUL54, o L/S de Quality com
-  drift fica com valor negativo (drawdown de −106%): a posição vendida cresce
-  com o salto falso em vez de voltar ao tamanho no dia seguinte. Com o drift
-  no padrão, corrigir esses preços no `factor_zoo` passa a ser necessário para
-  os L/S de Quality e Risk.
-- Os números das outras páginas (estilos, beta-neutro) são do engine com pesos
-  fixos; `weight_drift=False` reproduz.
+- **Papéis em reestruturação com drift:** sem zerar GOLL54 e AZUL54, o L/S de
+  Quality com drift no universo por ADTV fica com valor negativo (drawdown de
+  −110% no engine): a posição vendida cresce com a alta em vez de voltar ao
+  tamanho no dia seguinte. Como os preços estão corretos, essa é a perda real
+  de estar vendido nesses papéis; o engine com pesos fixos a escondia. A saída
+  é não tê-los no universo: o universo por índice, padrão desde o PR #30.
+- Os números das outras páginas (estilos, beta-neutro, universo por índice)
+  são do engine com pesos fixos; `weight_drift=False` reproduz.
+
+## Universo por índice com drift
+
+Universo padrão (IBX100 ∪ SMLL, `adtv_min=0`), 2010-01-01 a 2026-10-27,
+quintil 20%, `BME`, 10 bps; L/S beta-neutro; engine com o limite de idade
+(PR #26). Sem nenhum ajuste de preço:
+
+| Estilo | Livro | Pesos fixos: ret / Sharpe / MDD | Drift: ret / Sharpe / MDD | Pior dia com drift |
+|---|---|---|---|---|
+| Value | LO | 15,7% / 0,65 / −54% | 15,2% / 0,64 / −53% | −29,2% (26/10/2026) |
+| Quality | LO | 10,6% / 0,53 / −48% | 9,8% / 0,50 / −47% | −18,6% (26/10/2026) |
+| Momentum | LO | 15,5% / 0,70 / −55% | 15,2% / 0,70 / −54% | −17,7% |
+| Risk | LO | 13,3% / 0,91 / −37% | 13,0% / 0,90 / −37% | −11,6% |
+| Value | L/S β | 13,1% / 0,90 / −38% | 11,9% / 0,81 / −40% | −7,2% |
+| Quality | L/S β | 15,7% / 1,08 / −43% | 12,7% / 0,84 / −58% | −5,7% |
+| Momentum | L/S β | 20,4% / 1,13 / −51% | 18,9% / 0,99 / −60% | −10,3% |
+| Risk | L/S β | 20,1% / 1,33 / −33% | 19,5% / 1,25 / −39% | −8,4% |
+
+- Nenhuma quebra: o pior dia de um L/S com drift fica entre −6% e −10%. O
+  Quality L/S com drift, que quebrava no universo por ADTV, fica em 12,7% a.a.
+- Drift: −0,3 a −0,8 p.p. no long-only e −0,6 a −3,0 p.p. no L/S; o drawdown
+  dos L/S piora 2–15 p.p.
+- Os long-only com pesos fixos ficaram acima dos de
+  [universo-por-indice.md](universo-por-indice.md) (Value 15,7% contra 13,2%),
+  provavelmente pelo limite de idade (PR #26), que pesa mais no Value
+  (componentes de consenso). Não medido isoladamente.
 
 ## Ordem proposta
 
-1. ~~Pesos com drift (item 1).~~ Feito.
-2. Corrigir os preços de GOLL54 e AZUL54 no `factor_zoo` (pré-requisito para
-   os L/S com drift).
+1. ~~Pesos com drift (item 1).~~ Feito (PR #29).
+2. ~~Tirar do universo os papéis em reestruturação.~~ Feito: universo por
+   índice como padrão (PR #30).
 3. Cobertura mínima de componentes (item 3).
 4. CDI no long/short (item 2).
 5. `execution_lag` (item 4).

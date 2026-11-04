@@ -1,7 +1,7 @@
 # Estilos de longo prazo: backtests e quebras de performance
 
 - **Status:** Aprendizado
-- **Atualizado em:** 2026-10-28
+- **Atualizado em:** 2026-11-04
 
 ## Configuração
 
@@ -22,9 +22,11 @@ Liquidity ficou de fora por ser de curto prazo.
 
 ## Resultados
 
-Números do engine com pesos fixos entre rebalanceamentos, anterior ao drift
-(`weight_drift=False` reproduz). Com drift os retornos caem 0,3–1,0 p.p. no
-long-only; ver [diagnostico-engine.md](diagnostico-engine.md).
+Números do engine anterior: pesos fixos entre rebalanceamentos e universo por
+denominação com ADTV ≥ R$8 mi (`weight_drift=False, universe_index=None,
+adtv_min=8_000_000` reproduz, a menos do limite de idade do PR #26). O padrão
+atual é drift e universo IBX100 ∪ SMLL; números em
+[diagnostico-engine.md](diagnostico-engine.md).
 
 | Estilo | LO ret / Sharpe / MDD | L/S ret / Sharpe / MDD | β L/S vs Ibov |
 |---|---|---|---|
@@ -35,12 +37,13 @@ long-only; ver [diagnostico-engine.md](diagnostico-engine.md).
 
 ## Origem das quebras
 
-1. **Dado errado no factor_zoo.** GOLL54 em 12/06/2025 (+1.847% num dia) e
+1. **Papéis em reestruturação.** GOLL54 em 12/06/2025 (+1.847% num dia) e
    AZUL54 em 08–09/01/2026. Estavam na ponta vendida de Quality e Risk:
-   −71% e −68% num único dia. Detalhes em
+   −71% e −68% num único dia. Os preços estão corretos (confirmado em
+   2026-11-04; antes eram tratados como dado errado). Ambos passavam no filtro
+   de ADTV porque giravam muito durante a reestruturação; o universo por
+   índice, padrão desde o PR #30, já os tinha excluído. Detalhes em
    [../factor_zoo/problemas-conhecidos.md](../factor_zoo/problemas-conhecidos.md).
-   Ambos passavam no filtro de ADTV porque giravam muito durante a
-   reestruturação.
 2. **Beta das L/S.** Dollar-neutral não é beta-neutral: a L/S de Risk é, na
    prática, vendida em Ibovespa e quebra nos anos de alta (2016 −64%,
    2017 −32%, 2019 −13%, 2025). Resolvido com `beta_neutral=True`, ver

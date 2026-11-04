@@ -49,12 +49,20 @@ class BacktestConfig:
     (factor_zoo mnemonics / Fibery ``Name``). Explicit ``components`` win when both
     are set.
 
-    Universe: candidate pool from Fibery ``Inv-Taxonomia/Ativos`` filtered by
-    ``denomination`` (default ``"BRL"``). On each rebalance a name is investable
-    only when ``price_field`` is still printing after a forward-fill of at most
-    ``price_ffill_limit`` business days, and ``adtv_field >= adtv_min`` using an
-    ADTV print no older than that same limit. Pass ``codes`` to restrict further
-    (this skips the ``denomination`` filter).
+    Universe: by default the members of the B3 indices in ``universe_index``
+    (``("IBX100", "SMLL")``), with no ADTV floor (``adtv_min=0``). The index
+    methodologies already screen liquidity and special situations (names under
+    restructuring such as GOLL54 and AZUL54 leave before their jumps). Before
+    SMLL starts (2008-06-19) the universe is IBX100 alone.
+
+    ``universe_index=None`` uses instead the Fibery ``Inv-Taxonomia/Ativos``
+    pool filtered by ``denomination`` (default ``"BRL"``); set ``adtv_min`` with
+    it (e.g. ``8_000_000``), or illiquid names come in. On each rebalance a name
+    is investable only when ``price_field`` is still printing after a
+    forward-fill of at most ``price_ffill_limit`` business days, and
+    ``adtv_field >= adtv_min`` using an ADTV print no older than that same
+    limit. Pass ``codes`` to restrict further (this skips the ``denomination``
+    filter).
 
     Component staleness: a factor value older than its limit (calendar days)
     is treated as missing. Limits come from the component's Fibery
@@ -63,8 +71,8 @@ class BacktestConfig:
     single components. All limits must be within ``COMPONENT_LOOKBACK_DAYS``.
 
     Index universe: ``universe_index`` (a ``b3_index_composition`` field such as
-    ``"IBX100"``, or several, e.g. ``("IBX100", "SMLL")``) replaces the
-    ``denomination`` pool with the index members. On each rebalance a name must
+    ``"IBX100"``, or several, e.g. ``("IBX100", "SMLL")``, their union) replaces
+    the ``denomination`` pool with the index members. On each rebalance a name must
     also be a member on the latest stored session on or before the date; that
     session may be at most ``index_max_age_days`` calendar days old or the run
     fails. The price and ADTV filters still apply (``adtv_min=0`` disables
@@ -110,7 +118,7 @@ class BacktestConfig:
     top_n: Optional[int] = None
     denomination: str = "BRL"
     adtv_field: str = "median_dollar_volume_traded_21d"
-    adtv_min: float = 8_000_000.0
+    adtv_min: float = 0.0
     rebalance_freq: Optional[str] = "BME"
     rebalance_dates: Optional[Sequence[DateLike]] = None
     price_field: str = "price_close"
@@ -128,7 +136,7 @@ class BacktestConfig:
     component_max_age_days: Optional[Mapping[str, int]] = None
     beta_neutral: bool = False
     beta_field: str = "beta"
-    universe_index: Optional[Union[str, Sequence[str]]] = None
+    universe_index: Optional[Union[str, Sequence[str]]] = ("IBX100", "SMLL")
     index_max_age_days: int = 10
     weight_drift: bool = True
 
