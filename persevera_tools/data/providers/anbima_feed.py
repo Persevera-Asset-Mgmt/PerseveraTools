@@ -241,7 +241,7 @@ FEED_ENDPOINTS: Dict[str, tuple] = {
 # Quando uma categoria possui entrada aqui, ``AnbimaFeedProvider.get_data`` converte
 # o DataFrame "wide" devolvido pela API para o formato long padronizado
 # ``[date, code, field, value, source]`` — esperado pelas tabelas
-# ``credito_privado_historico`` / ``indicadores`` e compatível com o
+# ``renda_fixa_historico`` / ``indicadores`` e compatível com o
 # ``AnbimaProvider`` legado. Use ``raw=True`` em ``get_data`` para receber o JSON
 # bruto sem transformação.
 NORMALIZE_CONFIG: Dict[str, Dict[str, Any]] = {
@@ -362,7 +362,7 @@ class AnbimaFeedProvider(DataProvider):
     Formato de saída:
         Por padrão, categorias com entrada em ``NORMALIZE_CONFIG`` são convertidas
         para o formato long ``[date, code, field, value, source]``,
-        pronto para upsert em ``credito_privado_historico``. Categorias sem
+        pronto para upsert em ``renda_fixa_historico``. Categorias sem
         normalização (ou ``get_data(..., raw=True)``) devolvem o JSON da API
         convertido em DataFrame "wide".
     """

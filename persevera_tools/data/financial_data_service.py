@@ -423,18 +423,18 @@ class FinancialDataService:
             'sidra': (self.sidra, 'indicadores'),
             'debentures_com': (self.debentures_com, 'credito_privado_emissoes'),
             'anbima_indices': (self.anbima, 'indicadores'),
-            'anbima_debentures': (self.anbima, 'credito_privado_historico'),
+            'anbima_debentures': (self.anbima, 'renda_fixa_historico'),
             'anbima_titulos_publicos': (self.anbima, 'anbima_titulos_publicos_historico'),
-            'anbima_cri_cra': (self.anbima, 'credito_privado_historico'),
+            'anbima_cri_cra': (self.anbima, 'renda_fixa_historico'),
             # ANBIMA Feed (OAuth2) – preços e índices
             'anbima_feed_titulos_publicos_mercado_secundario': (self.anbima_feed, 'anbima_titulos_publicos_historico'),
             'anbima_feed_titulos_publicos_vna': (self.anbima_feed, 'indicadores'),
             'anbima_feed_titulos_publicos_curvas_juros': (self.anbima_feed, 'indicadores'),
-            'anbima_feed_debentures_mercado_secundario': (self.anbima_feed, 'credito_privado_historico'),
-            'anbima_feed_debentures_curvas_credito': (self.anbima_feed, 'credito_privado_historico'),
-            'anbima_feed_debentures_mais_mercado_secundario': (self.anbima_feed, 'credito_privado_historico'),
-            'anbima_feed_cri_cra_mercado_secundario': (self.anbima_feed, 'credito_privado_historico'),
-            'anbima_feed_fidc_mercado_secundario': (self.anbima_feed, 'credito_privado_historico'),
+            'anbima_feed_debentures_mercado_secundario': (self.anbima_feed, 'renda_fixa_historico'),
+            'anbima_feed_debentures_curvas_credito': (self.anbima_feed, 'renda_fixa_historico'),
+            'anbima_feed_debentures_mais_mercado_secundario': (self.anbima_feed, 'renda_fixa_historico'),
+            'anbima_feed_cri_cra_mercado_secundario': (self.anbima_feed, 'renda_fixa_historico'),
+            'anbima_feed_fidc_mercado_secundario': (self.anbima_feed, 'renda_fixa_historico'),
             'anbima_feed_indices_resultados_ihfa_fechado': (self.anbima_feed, 'indicadores'),
             'anbima_feed_indices_resultados_ima': (self.anbima_feed, 'indicadores'),
             'anbima_feed_indices_resultados_idka': (self.anbima_feed, 'indicadores'),
@@ -449,8 +449,8 @@ class FinancialDataService:
             'kraneshares': (self.kraneshares, 'indicadores'),
             'mdic': (self.mdic, 'indicadores'),
             'b3_investor_flow': (self.b3, 'indicadores'),
-            'b3_bdi': (self.b3, 'credito_privado_historico'),
-            'mais_retorno_debentures': (self.mais_retorno, 'credito_privado_historico'),
+            'b3_bdi': (self.b3, 'renda_fixa_historico'),
+            'mais_retorno_debentures': (self.mais_retorno, 'renda_fixa_historico'),
             'mais_retorno_fundos': (self.mais_retorno, 'fundos_cvm'),
             'investfy_investor_flow': (self.investfy, 'indicadores'),
         }
@@ -459,12 +459,12 @@ class FinancialDataService:
             raise ValueError(f"Unknown source: {source}")
 
         # Per-table default primary keys.
-        # credito_privado_historico includes 'source' because multiple providers share
+        # renda_fixa_historico includes 'source' because multiple providers share
         # the table and may produce identical (code, date, field) for different sources.
         # anbima_titulos_publicos_historico includes 'maturity' because the same bond
         # (code) can have different prices on the same date depending on its maturity.
         table_primary_keys = {
-            'credito_privado_historico': ['code', 'date', 'field', 'source'],
+            'renda_fixa_historico': ['code', 'date', 'field', 'source'],
             'anbima_titulos_publicos_historico': ['code', 'date', 'maturity', 'field'],
         }
 
