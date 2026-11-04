@@ -1,6 +1,6 @@
 # Diagnóstico do engine de backtest
 
-- **Status:** Proposta (item 1 implementado, PR a abrir)
+- **Status:** Proposta (item 1 implementado, PR #29)
 - **Atualizado em:** 2026-11-04
 
 Leitura do engine (`persevera_tools/quant_research/factor_investing`) feita em
@@ -116,7 +116,7 @@ ser menor que 5 pregões.
 - **Sem testes:** testes offline do limite de idade (PR #26), da simulação de
   P&L com e sem drift (`tests/test_factor_investing_simulation.py`) e CI em
   dois ambientes (PR #27). Ainda faltam testes de `portfolio` e do scoring.
-- **Pesos com drift (item 1):** PR a abrir.
+- **Pesos com drift (item 1):** PR #29.
 
 ## Medição: drift e lag
 
