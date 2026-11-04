@@ -1,7 +1,7 @@
 # factor_zoo: problemas conhecidos
 
 - **Status:** Aprendizado
-- **Atualizado em:** 2026-10-29
+- **Atualizado em:** 2026-11-04
 
 ## Preços errados após reestruturação
 
@@ -17,6 +17,50 @@ por dividendo. Os dois tickers estão no `SEED` de
 **Mitigação proposta:** alerta no pipeline diário para retorno diário acima de
 ±50% em `price_close`, para pegar esses casos e emendas de alias malfeitas.
 Mudança separada, ainda não implementada.
+
+## Universo de ações do backtest (verificado em 2026-11-04)
+
+Consultas só de leitura no `factor_zoo`, na `b3_index_composition` e na
+taxonomia do Fibery (`Inv-Taxonomia/Ativos`, 1.221 ações BRL e 31 USD).
+
+- **Sem viés de sobrevivência relevante:** 1.111 tickers BRL têm
+  `price_close`, e 734 pararam de negociar antes de out/2026. Deslistados
+  ficam com o histórico (LAME4 até 01/2022, SULA11 até 12/2022, BRML3 até
+  01/2023, CIEL3 até 08/2024, ENBR3, LINX3).
+- **Mesmo emissor em raízes diferentes:** um papel renomeado fica com o
+  histórico sob o ticker novo desde 2000, enquanto a outra classe continua no
+  ticker antigo. O `one_class_per_issuer` agrupa pela raiz do ticker e não
+  junta os dois. Detecção: o mesmo `roe` na mesma data em raízes diferentes.
+  Só um par entra de fato no universo ao mesmo tempo:
+
+  | Par | Preço simultâneo | Dias com os dois ADTV ≥ R$8 mi | Dias com os dois no IBX100 ∪ SMLL |
+  |---|---|---|---|
+  | AXIA3 × ELET6 (Eletrobras ON × PNB) | 2000 → 30/12/2019 | 3.091 | 4.950 |
+  | BRIT3 × BRST3 | 07/2021 → 12/2024 | 7 | 0 |
+  | EGIE3 × TBLE6 | 2000 → 08/2005 | 0 | 1.157 |
+
+  Os outros pares (BHIA3 × VVAR11/VVAR4, IGTI3 × JPSA4, RIAA3 × GUAR4,
+  AURE3 × CESP3/5/6, EPAR3 × BTTL4, ATOM3 × FICT3, AXIA3 × ELET5…) têm preço
+  no mesmo período, mas nunca os dois líquidos nem os dois no índice. Até 2019
+  a Eletrobras entra duas vezes no corte transversal e pode ter peso dobrado
+  no quintil. Em aberto: agrupar por emissor (por exemplo, pelo Fibery) em vez
+  da raiz.
+- **Série quebrada na virada de 2019/2020:** ELET5/ELET6 terminam em
+  23–30/12/2019 e AXIA5/AXIA6 começam em 02–09/01/2020; GOLL4 termina em
+  30/12/2019 e GOLL54 começa em 02/01/2020. O retorno entre as duas séries se
+  perde e o `momentum_12m` do ticker novo só existe a partir do fim de 2020.
+  Relacionado ao "Ticker atual antes da vigência" abaixo.
+- **BDRs na taxonomia BRL:** passam pelo filtro de denominação e algumas vezes
+  pelo ADTV mínimo: XPBR31 (1.252 dias com ADTV ≥ R$8 mi desde 10/2021),
+  NUBR33 (398), MILK33 (392), JBSS32 (336, desde 07/2025), DAGB33, CZLT33,
+  AGEN33, STOC34, STOC31. Nenhum esteve no IBOV, IBX100 ou SMLL, então o
+  universo por índice (`universe_index`) já os exclui. Com o universo por
+  denominação, falta decidir se empresas estrangeiras entram (JBSS32 é a JBS
+  depois da listagem nos EUA). `ERO` e `ERJ` também estão como BRL, com raiz
+  fora do padrão B3.
+- **ADTV em reais:** `median_dollar_volume_traded_21d` está em BRL apesar do
+  nome (PETR4: mediana de 21 dias de R$2,9 bi; preço × quantidade no último
+  pregão, R$4,7 bi).
 
 ## Composição de índices B3 (`b3_index_composition`)
 

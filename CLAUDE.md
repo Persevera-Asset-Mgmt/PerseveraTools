@@ -12,11 +12,17 @@ renda fixa, pesquisa quant (factor investing, risk budgeting) e integrações
 ## Ambiente
 - Testes e scripts: `.venv/Scripts/python.exe` (Python 3.12). O `python` do PATH
   é outro (3.15) e não tem numpy/pandas/pytest.
-- Testes: `.venv/Scripts/python.exe -m pytest -q tests/`
+- Testes: `.venv/Scripts/python.exe -m pytest -q tests/`. São offline (sem
+  banco, Fibery ou Bloomberg); um teste novo entra no Git normalmente (`tests/`
+  saiu do `.gitignore` no PR #27).
+- CI: `.github/workflows/tests.yml` roda os testes em todo PR e push no `main`,
+  em dois jobs: `dev` (Ubuntu, Python 3.12, `uv.lock`) e `prod-bloomberg`
+  (Windows, Python 3.11, pandas 2.2.2, numpy 1.26.4).
 - Produção: os jobs agendados (`run_*.bat`) rodam no PC Bloomberg, com
   Python 3.11, **pandas 2.2.2 e numpy 1.26**. Código com datas ou tipos numpy
-  deve funcionar também nessas versões. Uma mudança só chega lá depois de o
-  pacote ser reinstalado nessa máquina.
+  deve funcionar também nessas versões (o job `prod-bloomberg` do CI cobre
+  isso). Uma mudança só chega lá depois de o pacote ser reinstalado nessa
+  máquina.
 
 ## Banco e n8n
 - Vários providers de `persevera_tools/data/providers` têm uma réplica em
