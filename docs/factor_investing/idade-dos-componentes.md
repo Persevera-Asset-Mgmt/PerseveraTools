@@ -41,6 +41,12 @@ De onde vem a frequência de cada componente, em ordem:
    `short_interest_pct`, `days_to_cover`, `capex_to_sales`, `book_yield_ltm`,
    `ANNOUNCEMENT_DT`).
 
+Com `beta_neutral`, o beta que dimensiona as pernas segue o mesmo limite do
+`beta_field` (Diário, 10 dias). Um beta velho vira ausente e o
+`beta_neutralize` usa a mediana; o diagnóstico conta esses nomes em
+`n_stale_beta`. Assim, o mesmo beta não fica descartado no score (estilo Risk) e
+em uso no tamanho das pernas.
+
 Os limites ficam entre 0 e 365 dias (`COMPONENT_LOOKBACK_DAYS`), que é o
 histórico carregado antes de `start_date`. Antes, o primeiro rebalanceamento não
 via valores com mais de 1 ano e os seguintes viam.
@@ -72,6 +78,11 @@ Backtest Value, long-only, quintil 20%, `BME`, 2016-01-01 a 2025-12-31,
 
 100 das 120 carteiras mudam, quase sempre em poucos nomes.
 
+Risk, long/short beta-neutro, `universe_index="IBX100"`, `adtv_min=0`, quintil
+20%, `BME`, 2020-01-01 a 2025-12-31, sem custos: 72 rebalanceamentos, beta
+líquido 0 em todos e nenhum beta descartado por idade (os betas do IBX100 são
+diários).
+
 ## Em aberto
 
 - A BRAP4 passou a ficar **mais** tempo na carteira (71 meses contra 64): sem o
@@ -82,4 +93,3 @@ Backtest Value, long-only, quintil 20%, `BME`, 2016-01-01 a 2025-12-31,
   da regra por nome.
 - O filtro de ADTV (`snapshot_series(max_age=...)`) ainda conta a idade em
   linhas do painel, não em dias corridos.
-- Os betas da neutralização (`beta_neutral`) continuam sem limite de idade.

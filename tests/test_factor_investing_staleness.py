@@ -266,3 +266,49 @@ def test_rebalance_blanks_stale_values_and_reports_them():
     assert rebals["stale__fcf_yield_fwd"].iloc[0] == 1
     summary = summarize_diagnostics(BacktestDiagnostics(rebals=rebals))
     assert summary["n_stale_values"] == 1
+
+
+def _beta_neutral_books(max_age_days):
+    dates = pd.bdate_range("2024-01-01", "2024-03-29")
+    tickers = [f"T{chr(65 + i)}AA3" for i in range(12)]
+    prices = pd.DataFrame(100.0, index=dates, columns=tickers)
+    adtv_field = "median_dollar_volume_traded_21d"
+    adtv = pd.DataFrame(
+        1e8, index=dates,
+        columns=pd.MultiIndex.from_product([tickers, [adtv_field]], names=["ticker", "descriptor"]),
+    )
+    comp_panel = _panel({(t, "momentum_6m"): {"2024-03-28": float(i)} for i, t in enumerate(tickers)})
+    betas = {(t, "beta"): {"2024-03-28": 1.0} for t in tickers}
+    betas[(tickers[-1], "beta")] = {"2024-01-02": 5.0}  # maior score (perna comprada), beta de 87 dias
+    cfg = BacktestConfig(
+        start_date="2024-01-01", end_date="2024-03-29", components=["momentum_6m"],
+        construction="long_short", beta_neutral=True,
+    )
+    _, weights, rebals, _ = _form_rebalance_books(
+        cfg,
+        rebalance_dates=pd.DatetimeIndex([pd.Timestamp("2024-03-29")]),
+        adtv_panel=adtv,
+        component_panel=comp_panel,
+        prices=prices,
+        components=("momentum_6m",),
+        higher_is_better={},
+        max_age_days=max_age_days,
+        beta_panel=_panel(betas),
+    )
+    return weights, rebals
+
+
+def test_beta_neutral_ignores_stale_beta_and_reports_it():
+    _, rebals = _beta_neutral_books({"momentum_6m": 10, "beta": 10})
+    row = rebals.iloc[0]
+    assert row["beta_long"] == pytest.approx(1.0)  # beta velho vira a mediana (1,0)
+    assert row["gross_long"] == pytest.approx(1.0)
+    assert row["n_stale_beta"] == 1
+
+
+def test_beta_neutral_without_limit_keeps_old_beta():
+    _, rebals = _beta_neutral_books(None)
+    row = rebals.iloc[0]
+    assert row["beta_long"] == pytest.approx(3.0)  # (5 + 1) / 2
+    assert row["gross_long"] == pytest.approx(2 * 1.0 / (3.0 + 1.0))
+    assert row["n_stale_beta"] == 0

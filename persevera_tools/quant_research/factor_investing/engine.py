@@ -233,7 +233,8 @@ def _form_rebalance_books(
     With ``config.universe_index`` it must also be an index member on the
     latest stored session on or before the rebalance (``membership``). With
     ``config.beta_neutral`` the legs are resized with betas from ``beta_panel``
-    (no age limit).
+    under the ``config.beta_field`` limit in ``max_age_days``; a stale beta is
+    missing, so ``beta_neutralize`` fills it with the median.
     """
     score_rows: list[pd.Series] = []
     weight_rows: list[pd.Series] = []
@@ -302,12 +303,28 @@ def _form_rebalance_books(
 
         beta_info: Optional[dict[str, float]] = None
         if config.beta_neutral:
-            betas = snapshot_series(
+            beta_last, beta_ages = last_values_with_age(
                 beta_panel if beta_panel is not None else pd.DataFrame(),
                 dt,
-                config.beta_field,
-            ).reindex(scores.index)
+                (config.beta_field,),
+            )
+            beta_cross = apply_max_age(beta_last, beta_ages, max_age_days)
+            if config.beta_field in beta_cross.columns:
+                betas = beta_cross[config.beta_field].reindex(scores.index)
+                n_stale_beta = int(
+                    (
+                        beta_last[config.beta_field].notna()
+                        & beta_cross[config.beta_field].isna()
+                    )
+                    .reindex(weights.index)
+                    .fillna(False)
+                    .sum()
+                )
+            else:
+                betas = pd.Series(float("nan"), index=scores.index)
+                n_stale_beta = 0
             weights, beta_info = beta_neutralize(weights, betas)
+            beta_info["n_stale_beta"] = n_stale_beta
             if not (beta_info["beta_long"] > 0 and beta_info["beta_short"] > 0):
                 event_rows.append(
                     {
@@ -512,7 +529,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     )
     higher_is_better = get_higher_is_better_map(definitions)
     max_age_days = get_component_max_age(
-        components,
+        tuple(dict.fromkeys(components + ((config.beta_field,) if config.beta_neutral else ()))),
         definitions,
         max_age_by_frequency=config.max_age_by_frequency,
         overrides=config.component_max_age_days,
