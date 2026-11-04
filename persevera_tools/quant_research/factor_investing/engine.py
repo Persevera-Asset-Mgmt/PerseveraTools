@@ -16,6 +16,7 @@ from .data import (
     most_liquid_per_radical,
 )
 from .definitions import (
+    get_component_max_age,
     get_higher_is_better_map,
     load_factor_definitions,
     resolve_component_names,
@@ -28,7 +29,12 @@ from .result import (
     summarize_costs,
     summarize_diagnostics,
 )
-from .scoring import calculate_factor_exposure, snapshot_components, snapshot_series
+from .scoring import (
+    apply_max_age,
+    calculate_factor_exposure,
+    last_values_with_age,
+    snapshot_series,
+)
 
 
 def _prices_wide(price_panel: pd.DataFrame, price_field: str) -> pd.DataFrame:
@@ -160,6 +166,7 @@ def _rebal_row(
     if payload.get("n_index_members") is not None:
         row["n_index_members"] = int(payload["n_index_members"])
     cross_u = cross.reindex(universe)
+    stale: pd.Series = payload.get("stale", pd.Series(dtype=float))
     for comp in components:
         key = f"cov__{comp}"
         row[key] = (
@@ -167,6 +174,7 @@ def _rebal_row(
             if comp in cross_u.columns and n_universe > 0
             else float("nan")
         )
+        row[f"stale__{comp}"] = int(stale.get(comp, 0))
     return row
 
 
@@ -213,6 +221,7 @@ def _form_rebalance_books(
     prices: pd.DataFrame,
     components: tuple[str, ...],
     higher_is_better: Mapping[str, bool],
+    max_age_days: Optional[Mapping[str, int]] = None,
     beta_panel: Optional[pd.DataFrame] = None,
     membership: Optional[pd.DataFrame] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
@@ -220,10 +229,12 @@ def _form_rebalance_books(
 
     A name is investable only if it still has a price inside ``price_ffill_limit``
     and its ADTV print is inside that same limit and at least ``adtv_min``.
-    Factor values may be older than that window. With ``config.universe_index``
-    it must also be an index member on the latest stored session on or before
-    the rebalance (``membership``). With ``config.beta_neutral`` the legs are
-    resized with betas from ``beta_panel`` (no age limit, like factor values).
+    Factor values older than their ``max_age_days`` limit count as missing.
+    With ``config.universe_index`` it must also be an index member on the
+    latest stored session on or before the rebalance (``membership``). With
+    ``config.beta_neutral`` the legs are resized with betas from ``beta_panel``
+    under the ``config.beta_field`` limit in ``max_age_days``; a stale beta is
+    missing, so ``beta_neutralize`` fills it with the median.
     """
     score_rows: list[pd.Series] = []
     weight_rows: list[pd.Series] = []
@@ -253,10 +264,14 @@ def _form_rebalance_books(
         if len(universe) < config.min_names:
             continue
 
-        cross = snapshot_components(component_panel, dt, components)
+        last_values, ages = last_values_with_age(component_panel, dt, components)
+        cross = apply_max_age(last_values, ages, max_age_days)
         if cross.empty:
             continue
         cross_u = cross.reindex(universe)
+        stale = (
+            (last_values.notna() & cross.isna()).reindex(universe).fillna(False).sum()
+        )
         cross_scored = cross_u.dropna(how="all")
         n_dropped_share_class = 0
         if config.one_class_per_issuer:
@@ -288,12 +303,28 @@ def _form_rebalance_books(
 
         beta_info: Optional[dict[str, float]] = None
         if config.beta_neutral:
-            betas = snapshot_series(
+            beta_last, beta_ages = last_values_with_age(
                 beta_panel if beta_panel is not None else pd.DataFrame(),
                 dt,
-                config.beta_field,
-            ).reindex(scores.index)
+                (config.beta_field,),
+            )
+            beta_cross = apply_max_age(beta_last, beta_ages, max_age_days)
+            if config.beta_field in beta_cross.columns:
+                betas = beta_cross[config.beta_field].reindex(scores.index)
+                n_stale_beta = int(
+                    (
+                        beta_last[config.beta_field].notna()
+                        & beta_cross[config.beta_field].isna()
+                    )
+                    .reindex(weights.index)
+                    .fillna(False)
+                    .sum()
+                )
+            else:
+                betas = pd.Series(float("nan"), index=scores.index)
+                n_stale_beta = 0
             weights, beta_info = beta_neutralize(weights, betas)
+            beta_info["n_stale_beta"] = n_stale_beta
             if not (beta_info["beta_long"] > 0 and beta_info["beta_short"] > 0):
                 event_rows.append(
                     {
@@ -319,6 +350,7 @@ def _form_rebalance_books(
                     "prev_weights": prev_weights,
                     "trading_cost_bps": config.trading_cost_bps,
                     "n_dropped_share_class": n_dropped_share_class,
+                    "stale": stale,
                     "beta_info": beta_info,
                     "n_index_members": n_index_members,
                 },
@@ -484,7 +516,8 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
 
     1. Resolve components from Fibery style tags (or explicit mnemonics)
     2. Load historical ``factor_zoo`` panels via ``get_descriptors``
-    3. On each rebalance date: recent price and ADTV filter → PIT snapshot → score → weights
+    3. On each rebalance date: recent price and ADTV filter → PIT snapshot
+       (stale components blanked) → score → weights
     4. Hold weights until the next rebalance; compute daily P&L from ``price_field``
     5. Debit trading costs on rebalance closes and borrow on overnight shorts
     """
@@ -495,6 +528,12 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         definitions=definitions,
     )
     higher_is_better = get_higher_is_better_map(definitions)
+    max_age_days = get_component_max_age(
+        tuple(dict.fromkeys(components + ((config.beta_field,) if config.beta_neutral else ()))),
+        definitions,
+        max_age_by_frequency=config.max_age_by_frequency,
+        overrides=config.component_max_age_days,
+    )
     panels = load_backtest_panels(config, components)
 
     prices_raw = _prices_wide(panels["prices"], config.price_field)
@@ -520,6 +559,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         prices=prices,
         components=components,
         higher_is_better=higher_is_better,
+        max_age_days=max_age_days,
         beta_panel=panels.get("beta"),
         membership=panels.get("membership"),
     )
@@ -552,6 +592,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             "construction": config.construction,
             "style": config.style,
             "components": list(components),
+            "component_max_age_days": dict(max_age_days),
             "n_rebals": int(len(weights_df)),
             "selection_mode": config.selection_mode,
             "quantile": config.quantile,

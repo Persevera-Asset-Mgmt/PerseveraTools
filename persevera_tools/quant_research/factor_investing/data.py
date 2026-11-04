@@ -8,7 +8,7 @@ from typing import Optional, Sequence
 import pandas as pd
 
 from ...data import get_descriptors
-from .config import BacktestConfig, DateLike, _to_timestamp
+from .config import COMPONENT_LOOKBACK_DAYS, BacktestConfig, DateLike, _to_timestamp
 from .definitions import get_codes_by_denomination
 
 
@@ -216,7 +216,7 @@ def load_backtest_panels(
             f"denomination={config.denomination!r}, codes={config.codes!r})"
         )
 
-    lookback_start = config.start_date - pd.Timedelta(days=365)
+    lookback_start = config.start_date - pd.Timedelta(days=COMPONENT_LOOKBACK_DAYS)
 
     component_fields = list(dict.fromkeys(list(components)))
     beta_fields = [config.beta_field] if config.beta_neutral else []
