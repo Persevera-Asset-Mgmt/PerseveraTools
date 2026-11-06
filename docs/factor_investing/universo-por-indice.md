@@ -2,7 +2,7 @@
 
 - **Status:** Implementado (`BacktestConfig.universe_index`, PR #22; Hub:
   Persevera-Asset-Mgmt/PerseveraHub#17)
-- **Atualizado em:** 2026-11-05
+- **Atualizado em:** 2026-11-06
 
 ## Padrão de pesquisa
 
@@ -17,11 +17,13 @@ BacktestConfig(..., universe_index=("IBOV", "IBX100", "SMLL"), adtv_min=0)
   19/06/2008. Por isso o início fica em 2010-01-01 ou depois. IBX50, IBRA e
   MLCX ficam fora do padrão (IBRA só começa em 2012).
 - Empresas em recuperação judicial saem dos índices quando entram com o
-  pedido, antes dos dias de preço errado que quebravam os backtests:
+  pedido, antes dos saltos de preço que quebravam os backtests. Os preços
+  estão corretos (confirmado em 2026-11-04): são movimentos reais desses
+  papéis, e a saída é não tê-los no universo.
 
-  | Código | Último pregão nos índices | Dia de preço errado no factor_zoo |
+  | Código | Último pregão nos índices | Salto de preço |
   |---|---|---|
-  | GOLL54 | 30/01/2024 | 12/06/2025 |
+  | GOLL54 | 30/01/2024 | 12/06/2025 (+1.847%) |
   | AZUL54 | 29/05/2025 | 08–09/01/2026 |
 
 - Outro universo (ADTV, um índice só, `codes`) só como teste de
@@ -89,10 +91,10 @@ Universo IBX100 ∪ SMLL sem filtro de ADTV contra ADTV ≥ R$8 mi:
 | Risk | LO | 13,4% / 0,87 / −37% | 13,3% / 0,88 / −37% | 22 → 27 |
 | Risk | L/S | 16,0% / 0,85 / −51% | 20,1% / 1,30 / −33% | 44 → 54 |
 
-- As quebras de dado somem: em 12/06/2025 a Quality L/S passa de −57% no dia
-  para +0,7%, a Risk L/S de −35% para +0,8%; em 09/01/2026 a Momentum L/S de
-  −7,8% para +0,4%.
+- As quebras dos papéis em recuperação judicial somem: em 12/06/2025 a
+  Quality L/S passa de −57% no dia para +0,7%, a Risk L/S de −35% para +0,8%;
+  em 09/01/2026 a Momentum L/S de −7,8% para +0,4%.
 - Long-only praticamente igual; giro menor (Quality 11% → 6% por mês).
 - Universo médio de 147 membros (113 a 202).
-- A comparação mistura dois efeitos: tirar os dados ruins e mudar o tamanho
-  do universo. Momentum L/S teve drawdown maior (−51% contra −44%).
+- A comparação mistura dois efeitos: tirar os papéis em recuperação judicial e
+  mudar o tamanho do universo. Momentum L/S teve drawdown maior (−51% contra −44%).

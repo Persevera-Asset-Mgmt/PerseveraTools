@@ -1,7 +1,7 @@
 # Diagnóstico do engine de backtest
 
 - **Status:** Proposta (itens 1, 2 e 3 implementados, PRs #29 e #31)
-- **Atualizado em:** 2026-11-05
+- **Atualizado em:** 2026-11-06
 
 Leitura do engine (`persevera_tools/quant_research/factor_investing`) feita em
 2026-10-23 e reconferida no código do `main` em 2026-11-04 (depois dos PRs
@@ -135,9 +135,12 @@ Mesma configuração de [estilos-longo-prazo.md](estilos-longo-prazo.md)
 (2010-01-01 a 2026-10-27, quintil 20%, `BME`, ADTV ≥ R$8 mi, 10 bps); L/S
 beta-neutro. As carteiras são as do engine; um protótipo resimulou cada uma
 (correlação diária de 0,9999 com o engine na variante base). Os retornos de
-GOLL54 e AZUL54 nas janelas de preço errado foram zerados nas quatro
-variantes ([problemas-conhecidos.md](../factor_zoo/problemas-conhecidos.md)).
-Retorno anual em %, Sharpe entre parênteses:
+GOLL54 e AZUL54 nas janelas dos saltos foram zerados nas quatro variantes,
+porque na época eram tratados como preço errado. Os preços estão corretos
+(confirmado em 2026-11-04;
+[problemas-conhecidos.md](../factor_zoo/problemas-conhecidos.md)), então a
+tabela é um cenário sem esses dois papéis, para isolar o efeito do drift e do
+lag. Retorno anual em %, Sharpe entre parênteses:
 
 | Estilo | Livro | Base (pesos fixos) | Lag 1 pregão | Drift | Drift + lag |
 |---|---|---|---|---|---|
@@ -154,19 +157,23 @@ Retorno anual em %, Sharpe entre parênteses:
   −2,2 p.p. no L/S, com Sharpe 0,13–0,17 menor e drawdown 5–7 p.p. pior no L/S
   (a perna vendida passa a pesar mais quando os papéis sobem).
 - Lag: −0,6 a +1,1 p.p., sinal variável. Drift e lag praticamente se somam.
-- **Preço errado com drift:** sem zerar GOLL54 e AZUL54, o L/S de Quality com
-  drift fica com valor negativo (drawdown de −106%): a posição vendida cresce
-  com o salto falso em vez de voltar ao tamanho no dia seguinte. Com o drift
-  no padrão, corrigir esses preços no `factor_zoo` passa a ser necessário para
-  os L/S de Quality e Risk.
+- **Papéis em recuperação judicial com drift:** sem zerar GOLL54 e AZUL54, o
+  L/S de Quality com drift no universo por ADTV fica com valor negativo
+  (drawdown de −106% no protótipo, −110% no engine): a posição vendida cresce
+  com a alta em vez de voltar ao tamanho no dia seguinte. Como os preços estão
+  corretos, essa é a perda real de estar vendido nesses papéis; o engine com
+  pesos fixos a escondia. A saída é não tê-los no universo: o universo de
+  pesquisa IBOV ∪ IBX100 ∪ SMLL os exclui antes dos saltos
+  ([universo-por-indice.md](universo-por-indice.md)).
 - Os números das outras páginas (estilos, beta-neutro) são do engine com pesos
   fixos; `weight_drift=False` reproduz.
 
 ## Ordem proposta
 
 1. ~~Pesos com drift (item 1).~~ Feito.
-2. Corrigir os preços de GOLL54 e AZUL54 no `factor_zoo` (pré-requisito para
-   os L/S com drift).
+2. ~~Tirar do universo os papéis em recuperação judicial (GOLL54, AZUL54).~~
+   Feito pelo universo de pesquisa IBOV ∪ IBX100 ∪ SMLL. Os preços estão
+   corretos; não há o que corrigir no `factor_zoo`.
 3. ~~Cobertura mínima de componentes (item 3).~~ Feito.
 4. ~~CDI no long/short (item 2).~~ Feito (L/S sem rf no Sharpe).
 5. `execution_lag` (item 4).
