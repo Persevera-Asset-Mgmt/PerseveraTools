@@ -1,7 +1,7 @@
 # Estilos de longo prazo: backtests e quebras de performance
 
 - **Status:** Aprendizado
-- **Atualizado em:** 2026-10-28
+- **Atualizado em:** 2026-11-06
 
 ## Configuração
 
@@ -40,12 +40,12 @@ long-only; ver [diagnostico-engine.md](diagnostico-engine.md).
 
 ## Origem das quebras
 
-1. **Dado errado no factor_zoo.** GOLL54 em 12/06/2025 (+1.847% num dia) e
-   AZUL54 em 08–09/01/2026. Estavam na ponta vendida de Quality e Risk:
-   −71% e −68% num único dia. Detalhes em
+1. **Papéis em recuperação judicial.** GOLL54 em 12/06/2025 (+1.847% num dia)
+   e AZUL54 em 08–09/01/2026. Estavam na ponta vendida de Quality e Risk:
+   −71% e −68% num único dia. Os preços estão corretos (confirmado em
+   2026-11-04; antes eram tratados como dado errado). Ambos passavam no filtro
+   de ADTV porque giravam muito durante a reestruturação. Detalhes em
    [../factor_zoo/problemas-conhecidos.md](../factor_zoo/problemas-conhecidos.md).
-   Ambos passavam no filtro de ADTV porque giravam muito durante a
-   reestruturação.
 2. **Beta das L/S.** Dollar-neutral não é beta-neutral: a L/S de Risk é, na
    prática, vendida em Ibovespa e quebra nos anos de alta (2016 −64%,
    2017 −32%, 2019 −13%, 2025). Resolvido com `beta_neutral=True`, ver

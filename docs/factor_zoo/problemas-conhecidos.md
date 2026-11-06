@@ -1,22 +1,30 @@
 # factor_zoo: problemas conhecidos
 
 - **Status:** Aprendizado
-- **Atualizado em:** 2026-11-04
+- **Atualizado em:** 2026-11-06
 
-## Preços errados após reestruturação
+## Saltos de preço após reestruturação (preços corretos)
 
-| Código | Datas | `price_close` | Provável causa |
-|---|---|---|---|
-| GOLL54 | 11–16/06/2025 | 10,27 → 200,01 → 701,00 → 210,30 | grupamento não ajustado ou emenda do alias GOLL4→GOLL54 |
-| AZUL54 | 05–09/01/2026 | 680 → 558,9 → 255 → 25 → 75 | idem, alias AZUL4→AZUL54 |
+| Código | Datas | `price_close` |
+|---|---|---|
+| GOLL54 | 11–16/06/2025 | 10,27 → 200,01 → 701,00 → 210,30 |
+| AZUL54 | 05–09/01/2026 | 680 → 558,9 → 255 → 25 → 75 |
 
-`price_close_split_adj` tem os mesmos valores, então o erro não está no ajuste
-por dividendo. Os dois tickers estão no `SEED` de
-`persevera_tools/data/factor_zoo/aliases.py`.
+Os preços estão corretos (confirmado em 2026-11-04); até então eram tratados
+aqui como erro de grupamento ou de emenda do alias. São movimentos reais de
+papéis em recuperação judicial, que passavam no filtro de ADTV porque giravam
+muito. Não há o que corrigir no `factor_zoo`. Os dois tickers estão no `SEED`
+de `persevera_tools/data/factor_zoo/aliases.py`.
 
-**Mitigação proposta:** alerta no pipeline diário para retorno diário acima de
-±50% em `price_close`, para pegar esses casos e emendas de alias malfeitas.
-Mudança separada, ainda não implementada.
+**Como o backtest lida:** pelo universo de pesquisa IBOV ∪ IBX100 ∪ SMLL
+([universo-por-indice.md](../factor_investing/universo-por-indice.md)): GOLL54
+sai dos índices em 30/01/2024 e AZUL54 em 29/05/2025, antes dos saltos. No
+universo por ADTV, com os pesos com drift (PR #29), o Quality L/S beta-neutro
+vendido em GOLL54 perde tudo (drawdown de −110%): é a perda real de uma posição
+vendida durante a alta, que o engine com pesos fixos escondia.
+
+Um alerta de retorno diário acima de ±50% no pipeline ainda serve para pegar
+emendas de alias malfeitas, mas não indicaria erro nesses dois casos.
 
 ## Universo de ações do backtest (verificado em 2026-11-04)
 
@@ -186,8 +194,8 @@ taxonomia do Fibery (`Inv-Taxonomia/Ativos`, 1.221 ações BRL e 31 USD).
 - Primeira carga em 2026-10-28 (PC do Bloomberg): 5 índices de 19/06 a 27/10
   e IBRA desde o lançamento (23/07/2012, 860 consultas, ~15 min). Emenda com a
   carga antiga sem troca de membros; pesos somam 100% ± 0,5 em todo pregão.
-  GOLL54 sai do IBRA em 30/01/2024 e AZUL54 em 29/05/2025, antes dos preços
-  errados; GOLL4 sai do IBX100 da carga antiga um pregão antes (29/01/2024),
+  GOLL54 sai do IBRA em 30/01/2024 e AZUL54 em 29/05/2025, antes dos saltos
+  de preço; GOLL4 sai do IBX100 da carga antiga um pregão antes (29/01/2024),
   então as fontes podem divergir em ±1 pregão nas datas de troca.
 - Na carga diária a janela vai do último pregão gravado até o pregão
   anterior à execução: o pregão do dia entra na execução seguinte, e o último

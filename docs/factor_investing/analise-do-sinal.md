@@ -1,7 +1,7 @@
 # Análise do sinal, Sharpe sobre CDI e cobertura mínima de componentes
 
 - **Status:** Implementado (PR #31)
-- **Atualizado em:** 2026-11-05
+- **Atualizado em:** 2026-11-06
 
 ## O que mudou no motor
 
@@ -110,7 +110,8 @@ Mesmo motor, só troca o universo:
 | Risk | 3,8 → 4,4 | 1,2 → 1,6 | 0,81 → 1,33 |
 
 O universo por índice é ~25% maior (129–141 contra 103–112 nomes) e não tem
-os dias de dado errado de GOLL54/AZUL54; os dois efeitos estão misturados.
+os saltos de GOLL54/AZUL54 (preços corretos, papéis em recuperação judicial);
+os dois efeitos estão misturados.
 
 ## Em aberto
 
