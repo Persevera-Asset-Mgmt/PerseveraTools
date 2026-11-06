@@ -33,5 +33,6 @@ mostraram e o que ainda está em aberto.
 | [factor_investing/idade-dos-componentes.md](factor_investing/idade-dos-componentes.md) | Implementado (PR #26) | Limite de idade dos componentes por `Frequência` (Diário, Consenso, Trimestral) |
 | [factor_investing/diagnostico-engine.md](factor_investing/diagnostico-engine.md) | Proposta (itens 1–3 implementados, PRs #29 e #31) | Problemas do engine e medição de drift e lag: pesos com drift, CDI no L/S e cobertura mínima (feitos), defasagem de execução |
 | [factor_zoo/problemas-conhecidos.md](factor_zoo/problemas-conhecidos.md) | Aprendizado | Saltos de papéis em recuperação judicial (preços corretos), carga da composição de índices (PRs #15–#18, #21, #22), tickers antigos, mesmo emissor em raízes diferentes, BDRs no universo |
+| [monitoring/validacao-diaria.md](monitoring/validacao-diaria.md) | Implementado (este PR) | Validação diária das rotinas agendadas pelo banco: checagens, limites e o que a primeira execução encontrou |
 | [data/providers-tabelas-n8n.md](data/providers-tabelas-n8n.md) | Aprendizado | Tabela de destino de cada provider, chaves do upsert e workflows do n8n que replicam a carga |
 | [risk_budgeting_spectrum/calibracao.md](risk_budgeting_spectrum/calibracao.md) | Aprendizado | Calibração do Motor RBS no Fibery e problemas conhecidos |

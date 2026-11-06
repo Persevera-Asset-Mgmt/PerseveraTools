@@ -33,6 +33,7 @@ Bloomberg (Windows, Python 3.11, pandas 2.2.2, numpy 1.26.4).
 | `quant_research.allocation_engine` | motor de alocação agnóstico a instrumento |
 | `db` | conexão e upsert no Postgres; cliente Fibery |
 | `open_finance` | integração Pluggy |
+| `monitoring` | validação diária das rotinas agendadas pelo que chegou no banco (`python -m persevera_tools.monitoring.daily_checks`) |
 | `config`, `utils` | configuração por `.env`, logging, datas |
 
 A tabela de destino de cada provider, e quais têm réplica em workflow do n8n,
@@ -133,6 +134,10 @@ Os jobs agendados (`run_factor_zoo_daily.bat`, `run_factor_zoo_independent.bat`,
 `run_ihfa_subindices.bat`) rodam no PC Bloomberg, com Python 3.11, pandas 2.2.2
 e numpy 1.26. Uma mudança no `main` só vale lá depois de o pacote ser
 reinstalado nessa máquina.
+
+A validação diária (`persevera_tools.monitoring.daily_checks`) só lê o banco e
+roda fora do PC Bloomberg; o que cada checagem cobre está em
+[docs/monitoring/validacao-diaria.md](docs/monitoring/validacao-diaria.md).
 
 ## Documentação
 
