@@ -2,31 +2,30 @@
 
 from __future__ import annotations
 
+import math
 from typing import Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
 
-def calculate_factor_exposure(
+def component_zscores(
     df: pd.DataFrame,
-    factor_name: str = "factor_score",
     higher_is_better_map: Optional[Mapping[str, bool]] = None,
     zR: float = 3.0,
     zC: float = 3.0,
-) -> pd.Series:
+) -> pd.DataFrame:
     """
-    Cross-sectional factor scores for one date (codes × component columns).
+    Sign-aligned cross-sectional z-scores per component for one date.
 
     Steps:
       1. Robust MAD winsorization (``zR``)
       2. Classical mean/std winsorization (``zC``)
-      3. Equal-weighted unit-std z-scores
+      3. Unit-std z-scores
       4. Sign alignment via ``higher_is_better_map`` (invert when False)
-      5. Equal-weighted average across component columns
     """
     if df.empty or df.shape[1] == 0:
-        return pd.Series(dtype=float, name=factor_name)
+        return pd.DataFrame(index=df.index, columns=df.columns, dtype=float)
 
     work = df.apply(pd.to_numeric, errors="coerce")
 
@@ -66,10 +65,44 @@ def calculate_factor_exposure(
         for col in z_scores.columns:
             if not higher_is_better_map.get(col, True):
                 z_scores[col] = -z_scores[col]
+    return z_scores.astype(float)
 
-    scores = z_scores.mean(axis=1, skipna=True)
+
+def calculate_factor_exposure(
+    df: pd.DataFrame,
+    factor_name: str = "factor_score",
+    higher_is_better_map: Optional[Mapping[str, bool]] = None,
+    zR: float = 3.0,
+    zC: float = 3.0,
+) -> pd.Series:
+    """
+    Cross-sectional factor scores for one date (codes × component columns).
+
+    Equal-weighted average of :func:`component_zscores` across the components
+    each name has (missing components are skipped).
+    """
+    if df.empty or df.shape[1] == 0:
+        return pd.Series(dtype=float, name=factor_name)
+    scores = component_zscores(df, higher_is_better_map, zR=zR, zC=zC).mean(
+        axis=1, skipna=True
+    )
     scores.name = factor_name
     return scores
+
+
+def coverage_mask(cross: pd.DataFrame, min_coverage: float) -> pd.Series:
+    """
+    Names with at least ``ceil(min_coverage * K)`` components (minimum 1).
+
+    ``K`` counts only components with some value in ``cross``, so a field that
+    is not yet available on that date does not exclude everyone.
+    """
+    if cross.empty:
+        return pd.Series(dtype=bool, index=cross.index)
+    active = [c for c in cross.columns if cross[c].notna().any()]
+    counts = cross[active].notna().sum(axis=1) if active else pd.Series(0, index=cross.index)
+    need = max(1, math.ceil(round(float(min_coverage) * len(active), 9)))
+    return counts >= need
 
 
 def last_values_with_age(

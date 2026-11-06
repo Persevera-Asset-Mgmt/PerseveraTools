@@ -13,6 +13,7 @@ from .data import (
     densify_prices,
     index_members_at,
     load_backtest_panels,
+    load_reference_series,
     most_liquid_per_radical,
 )
 from .definitions import (
@@ -31,7 +32,8 @@ from .result import (
 )
 from .scoring import (
     apply_max_age,
-    calculate_factor_exposure,
+    component_zscores,
+    coverage_mask,
     last_values_with_age,
     snapshot_series,
 )
@@ -157,6 +159,7 @@ def _rebal_row(
         "n_long": int((weights > 0).sum()),
         "n_short": int((weights < 0).sum()),
         "n_missing_components": int(missing_all.sum()) if n_universe else 0,
+        "n_low_coverage": int(payload.get("n_low_coverage", 0)),
         "n_dropped_share_class": int(payload.get("n_dropped_share_class", 0)),
         "turnover": _turnover(prev_weights, weights),
         "traded_notional": traded,
@@ -224,8 +227,11 @@ def _form_rebalance_books(
     max_age_days: Optional[Mapping[str, int]] = None,
     beta_panel: Optional[pd.DataFrame] = None,
     membership: Optional[pd.DataFrame] = None,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[dict[str, Any]], pd.DataFrame]:
     """Form scores/weights and collect rebalance diagnostics + drop events.
+
+    Returns scores, weights, rebalance diagnostics, events and the
+    sign-aligned component z-scores (indexed by ``(date, code)``).
 
     A name is investable only if it still has a price inside ``price_ffill_limit``
     and its ADTV print is inside that same limit and at least ``adtv_min``.
@@ -240,6 +246,7 @@ def _form_rebalance_books(
     weight_rows: list[pd.Series] = []
     rebal_rows: list[dict[str, Any]] = []
     event_rows: list[dict[str, Any]] = []
+    component_rows: list[pd.DataFrame] = []
     prev_weights: Optional[pd.Series] = None
 
     for dt in rebalance_dates:
@@ -272,7 +279,10 @@ def _form_rebalance_books(
         stale = (
             (last_values.notna() & cross.isna()).reindex(universe).fillna(False).sum()
         )
-        cross_scored = cross_u.dropna(how="all")
+        covered = coverage_mask(cross_u, config.min_component_coverage)
+        has_any = cross_u.notna().any(axis=1)
+        n_low_coverage = int((has_any & ~covered).sum())
+        cross_scored = cross_u.loc[covered]
         n_dropped_share_class = 0
         if config.one_class_per_issuer:
             keep = most_liquid_per_radical(liquid.reindex(cross_scored.index))
@@ -281,13 +291,13 @@ def _form_rebalance_books(
         if len(cross_scored) < config.min_names:
             continue
 
-        scores = calculate_factor_exposure(
+        zs = component_zscores(
             cross_scored,
-            factor_name=config.style or "factor_score",
             higher_is_better_map=higher_is_better,
             zR=config.zR,
             zC=config.zC,
-        ).dropna()
+        )
+        scores = zs.mean(axis=1, skipna=True).rename(config.style or "factor_score").dropna()
         if len(scores) < config.min_names:
             continue
 
@@ -350,6 +360,7 @@ def _form_rebalance_books(
                     "prev_weights": prev_weights,
                     "trading_cost_bps": config.trading_cost_bps,
                     "n_dropped_share_class": n_dropped_share_class,
+                    "n_low_coverage": n_low_coverage,
                     "stale": stale,
                     "beta_info": beta_info,
                     "n_index_members": n_index_members,
@@ -359,6 +370,9 @@ def _form_rebalance_books(
         if prev_weights is not None:
             event_rows.extend(_dropped_at_rebal_events(prev_weights, weights, dt))
 
+        zs = zs.loc[scores.index]
+        zs.index = pd.MultiIndex.from_product([[dt], zs.index], names=["date", "code"])
+        component_rows.append(zs)
         score_rows.append(scores.rename(dt))
         weight_rows.append(weights.rename(dt))
         prev_weights = weights
@@ -377,7 +391,8 @@ def _form_rebalance_books(
     if not rebals_df.empty:
         rebals_df = rebals_df.set_index("date").sort_index()
         rebals_df.index = pd.DatetimeIndex(rebals_df.index)
-    return scores_df, weights_df, rebals_df, event_rows
+    components_df = pd.concat(component_rows).sort_index()
+    return scores_df, weights_df, rebals_df, event_rows, components_df
 
 
 def _drift_session(
@@ -659,7 +674,7 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
     if rebalance_dates.empty:
         raise ValueError("No rebalance dates in the requested window")
 
-    scores_df, weights_df, rebals_df, rebal_events = _form_rebalance_books(
+    scores_df, weights_df, rebals_df, rebal_events, components_df = _form_rebalance_books(
         config,
         rebalance_dates=rebalance_dates,
         adtv_panel=panels["adtv"],
@@ -698,7 +713,25 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         n_days_renorm=n_days_renorm,
     )
 
-    summary = build_summary(nav.dropna(), risk_free_rate=config.risk_free_rate)
+    ref_start = config.start_date - pd.Timedelta(days=15)
+    rf_index = (
+        load_reference_series(config.risk_free_series, ref_start, config.end_date)
+        if config.risk_free_series
+        else None
+    )
+    bench_index = (
+        load_reference_series(config.benchmark_series, ref_start, config.end_date)
+        if config.benchmark_series
+        else None
+    )
+    subtract_rf = config.construction == "long_only"
+    summary = build_summary(
+        nav.dropna(),
+        risk_free_rate=config.risk_free_rate,
+        risk_free_index=rf_index,
+        benchmark_index=bench_index,
+        subtract_risk_free=subtract_rf,
+    )
     summary.update(
         {
             "construction": config.construction,
@@ -717,6 +750,9 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
             "weight_drift": config.weight_drift,
             "beta_neutral": config.beta_neutral,
             "universe_index": list(config.universe_index) if config.universe_index else None,
+            "min_component_coverage": config.min_component_coverage,
+            "risk_free_series": config.risk_free_series,
+            "benchmark_series": config.benchmark_series,
         }
     )
     summary.update(diag_summary)
@@ -726,8 +762,9 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         strategy_returns, costs_df, initial_nav=config.initial_nav
     )
     if not gross_nav.empty:
-        gross_stats = build_summary(gross_nav.dropna(), risk_free_rate=config.risk_free_rate)
-        summary["gross_annualized_return"] = gross_stats["annualized_return"]
+        summary["gross_annualized_return"] = build_summary(gross_nav.dropna())[
+            "annualized_return"
+        ]
     else:
         summary["gross_annualized_return"] = float("nan")
 
@@ -740,4 +777,6 @@ def run_backtest(config: BacktestConfig) -> BacktestResult:
         diagnostics=diagnostics,
         config=config,
         components=components,
+        prices=prices.loc[: config.end_date],
+        component_scores=components_df,
     )

@@ -252,7 +252,7 @@ def test_rebalance_blanks_stale_values_and_reports_them():
     comp_panel = _panel(comp)
 
     cfg = BacktestConfig(start_date="2024-01-01", end_date="2024-03-29", components=["fcf_yield_fwd"])
-    scores, _, rebals, _ = _form_rebalance_books(
+    scores, _, rebals, _, _ = _form_rebalance_books(
         cfg,
         rebalance_dates=pd.DatetimeIndex([pd.Timestamp("2024-03-29")]),
         adtv_panel=adtv,
@@ -284,7 +284,7 @@ def _beta_neutral_books(max_age_days):
         start_date="2024-01-01", end_date="2024-03-29", components=["momentum_6m"],
         construction="long_short", beta_neutral=True,
     )
-    _, weights, rebals, _ = _form_rebalance_books(
+    _, weights, rebals, _, _ = _form_rebalance_books(
         cfg,
         rebalance_dates=pd.DatetimeIndex([pd.Timestamp("2024-03-29")]),
         adtv_panel=adtv,

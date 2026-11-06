@@ -1,7 +1,7 @@
 # Diagnóstico do engine de backtest
 
-- **Status:** Proposta (item 1 implementado, PR #29)
-- **Atualizado em:** 2026-11-04
+- **Status:** Proposta (itens 1, 2 e 3 implementados, PRs #29 e #31)
+- **Atualizado em:** 2026-11-05
 
 Leitura do engine (`persevera_tools/quant_research/factor_investing`) feita em
 2026-10-23 e reconferida no código do `main` em 2026-11-04 (depois dos PRs
@@ -45,7 +45,12 @@ Medido: o drift tira de 0,3 a 2,2 p.p. ao ano em todos os casos (tabela
 abaixo). O engine anterior também escondia um giro de 130–200% ao ano no
 long-only e 455–600% no L/S, feito de graça para voltar ao peso alvo todo dia.
 
-### 2. Sharpe do long/short com taxa livre de risco
+### 2. Sharpe do long/short com taxa livre de risco (implementado)
+
+**Implementado** no PR #31 ([analise-do-sinal.md](analise-do-sinal.md)): o L/S não
+desconta taxa livre de risco no Sharpe; a long-only desconta a série do CDI
+(`risk_free_series="br_cdi_index"`). O texto abaixo é o diagnóstico original.
+
 
 No L/S a garantia não rende nada, mas `build_summary` subtrai
 `risk_free_rate` do retorno anualizado. O padrão é 0, então hoje não aparece;
@@ -53,7 +58,12 @@ com o CDI (~14%), o Sharpe do L/S fica muito negativo sem motivo. Duas saídas:
 somar o CDI sobre a garantia no retorno do L/S, ou não subtrair a taxa livre
 de risco no L/S.
 
-### 3. Nomes com poucos componentes ganham força no score
+### 3. Nomes com poucos componentes ganham força no score (implementado)
+
+**Implementado** no PR #31: `min_component_coverage=0.5` (padrão), aplicado
+depois do limite de idade; `n_low_coverage` por rebalanceamento conta quem saiu.
+O texto abaixo é o diagnóstico original.
+
 
 `z_scores.mean(axis=1, skipna=True)` em `calculate_factor_exposure` tira a
 média só dos componentes disponíveis. Um papel com 1 de 5 componentes recebe
@@ -117,6 +127,7 @@ ser menor que 5 pregões.
   P&L com e sem drift (`tests/test_factor_investing_simulation.py`) e CI em
   dois ambientes (PR #27). Ainda faltam testes de `portfolio` e do scoring.
 - **Pesos com drift (item 1):** PR #29.
+- **Sharpe do L/S sem taxa livre de risco (item 2) e cobertura mínima (item 3):** PR #31.
 
 ## Medição: drift e lag
 
@@ -156,8 +167,8 @@ Retorno anual em %, Sharpe entre parênteses:
 1. ~~Pesos com drift (item 1).~~ Feito.
 2. Corrigir os preços de GOLL54 e AZUL54 no `factor_zoo` (pré-requisito para
    os L/S com drift).
-3. Cobertura mínima de componentes (item 3).
-4. CDI no long/short (item 2).
+3. ~~Cobertura mínima de componentes (item 3).~~ Feito.
+4. ~~CDI no long/short (item 2).~~ Feito (L/S sem rf no Sharpe).
 5. `execution_lag` (item 4).
 6. Agrupar por emissor em vez da raiz do ticker (Eletrobras ON × PNB, ver
    [problemas-conhecidos.md](../factor_zoo/problemas-conhecidos.md)).

@@ -20,6 +20,9 @@ Typical usage::
     )
     result = run_backtest(config)
     print(result.summary)
+
+    report = analyze_signal(result)   # IC, quantiles, Fama-MacBeth
+    print(report.summary)
 """
 
 from .config import DEFAULT_MAX_AGE_BY_FREQUENCY, BacktestConfig
@@ -36,7 +39,8 @@ from .definitions import (
 from .engine import run_backtest
 from .portfolio import beta_neutralize, scores_to_weights
 from .result import BacktestDiagnostics, BacktestResult
-from .scoring import calculate_factor_exposure, snapshot_components
+from .scoring import calculate_factor_exposure, component_zscores, snapshot_components
+from .signal_analysis import SignalReport, analyze_signal
 
 __all__ = [
     "BacktestConfig",
@@ -44,6 +48,9 @@ __all__ = [
     "BacktestResult",
     "BacktestDiagnostics",
     "run_backtest",
+    "analyze_signal",
+    "SignalReport",
+    "component_zscores",
     "calculate_factor_exposure",
     "snapshot_components",
     "scores_to_weights",
