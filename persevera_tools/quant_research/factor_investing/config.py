@@ -60,6 +60,27 @@ class BacktestConfig:
         ``risk_free_rate``), accrued daily as
         ``short_gross * borrow_rate / 252``. Long-only is unaffected.
 
+    Component coverage: a name is scored only when it has at least
+    ``ceil(min_component_coverage * K)`` of the ``K`` components that have any
+    value in the universe on that rebalance. The composite is the mean of the
+    available z-scores, so a name scored on few components has a more dispersed
+    score and lands in the tails more often. ``min_component_coverage=0`` keeps
+    the old rule (at least one component).
+
+    Risk-free and benchmark (summary only, they do not change the NAV):
+      - ``risk_free_series`` is a ``get_series`` code of a cumulative index
+        (default ``"br_cdi_index"``). Its daily return over the NAV dates is
+        the risk-free leg of the Sharpe ratio. ``risk_free_rate`` is the
+        constant alternative (annualized decimal); set
+        ``risk_free_series=None`` to use it. Passing both is an error.
+      - The risk-free leg is subtracted only for ``long_only``. A
+        ``long_short`` book is self-financed, so its return is already an
+        excess return and its Sharpe uses no risk-free leg.
+      - ``benchmark_series`` (default ``"br_ibovespa"``, a total-return index)
+        adds beta, alpha (with a Newey-West t-stat) and correlation, plus
+        active return, tracking error and information ratio for
+        ``long_only``. ``None`` skips it.
+
     Beta neutrality (``long_short`` only): with ``beta_neutral=True`` each
     rebalance resizes the legs so that ``gross_long * beta_long ==
     gross_short * beta_short`` while ``gross_long + gross_short`` stays 2.
@@ -87,7 +108,10 @@ class BacktestConfig:
     zR: float = 3.0
     zC: float = 3.0
     min_names: int = 10
+    min_component_coverage: float = 0.5
     risk_free_rate: float = 0.0
+    risk_free_series: Optional[str] = "br_cdi_index"
+    benchmark_series: Optional[str] = "br_ibovespa"
     initial_nav: float = 1.0
     trading_cost_bps: float = 0.0
     borrow_rate: float = 0.0
@@ -116,6 +140,17 @@ class BacktestConfig:
             raise ValueError("adtv_min must be >= 0")
         if self.min_names < 1:
             raise ValueError("min_names must be >= 1")
+        if not 0.0 <= self.min_component_coverage <= 1.0:
+            raise ValueError("min_component_coverage must be in [0, 1]")
+        if self.risk_free_series is not None and not str(self.risk_free_series).strip():
+            self.risk_free_series = None
+        if self.benchmark_series is not None and not str(self.benchmark_series).strip():
+            self.benchmark_series = None
+        if self.risk_free_series and self.risk_free_rate:
+            raise ValueError(
+                "Pass either risk_free_series or a non-zero risk_free_rate, not both "
+                "(set risk_free_series=None to use a constant rate)"
+            )
         if self.price_ffill_limit < 0:
             raise ValueError("price_ffill_limit must be >= 0")
         if not str(self.denomination).strip():

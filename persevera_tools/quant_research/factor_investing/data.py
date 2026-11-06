@@ -7,7 +7,7 @@ from typing import Optional, Sequence
 
 import pandas as pd
 
-from ...data import get_descriptors
+from ...data import get_descriptors, get_series
 from .config import BacktestConfig, DateLike, _to_timestamp
 from .definitions import get_codes_by_denomination
 
@@ -297,6 +297,27 @@ def densify_prices(
     if ffill_limit and ffill_limit > 0:
         dense = dense.ffill(limit=int(ffill_limit))
     return dense
+
+
+def load_reference_series(
+    code: str,
+    start_date: DateLike,
+    end_date: DateLike,
+) -> pd.Series:
+    """
+    Daily levels of a cumulative index from ``INDICADORES`` (``get_series``).
+
+    Used for the risk-free leg (``br_cdi_index``) and the benchmark
+    (``br_ibovespa``). Raises when the series is empty.
+    """
+    raw = get_series(code, start_date=_to_timestamp(start_date), end_date=_to_timestamp(end_date))
+    series = raw.squeeze(axis=1) if isinstance(raw, pd.DataFrame) else raw
+    series = pd.Series(series, dtype=float).dropna().sort_index()
+    if series.empty:
+        raise ValueError(f"No data for reference series {code!r}")
+    series.index = pd.DatetimeIndex(series.index).normalize()
+    series.name = code
+    return series
 
 
 def build_rebalance_dates(config: BacktestConfig, calendar: pd.DatetimeIndex) -> pd.DatetimeIndex:

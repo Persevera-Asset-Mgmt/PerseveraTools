@@ -20,6 +20,11 @@ Liquidity ficou de fora por ser de curto prazo.
 `adtv_min=8_000_000`, `trading_cost_bps=10`, `one_class_per_issuer=True`,
 `price_field="price_close"`.
 
+> **Universo antigo.** Estes números usam o universo por ADTV. O padrão agora
+> é IBOV ∪ IBX100 ∪ SMLL com `adtv_min=0`
+> ([universo-por-indice.md](universo-por-indice.md)), que elimina a quebra 1
+> abaixo.
+
 ## Resultados
 
 | Estilo | LO ret / Sharpe / MDD | L/S ret / Sharpe / MDD | β L/S vs Ibov |

@@ -2,7 +2,32 @@
 
 - **Status:** Implementado (`BacktestConfig.universe_index`, PR #22; Hub:
   Persevera-Asset-Mgmt/PerseveraHub#17)
-- **Atualizado em:** 2026-10-29
+- **Atualizado em:** 2026-11-05
+
+## Padrão de pesquisa
+
+Todo backtest de factor investing roda, por padrão, com:
+
+```python
+BacktestConfig(..., universe_index=("IBOV", "IBX100", "SMLL"), adtv_min=0)
+```
+
+- IBOV, IBX100 (IBrX 100) e SMLL são os índices com histórico mais longo na
+  `b3_index_composition`: IBOV e IBX100 desde 03/01/2000, SMLL desde
+  19/06/2008. Por isso o início fica em 2010-01-01 ou depois. IBX50, IBRA e
+  MLCX ficam fora do padrão (IBRA só começa em 2012).
+- Empresas em recuperação judicial saem dos índices quando entram com o
+  pedido, antes dos dias de preço errado que quebravam os backtests:
+
+  | Código | Último pregão nos índices | Dia de preço errado no factor_zoo |
+  |---|---|---|
+  | GOLL54 | 30/01/2024 | 12/06/2025 |
+  | AZUL54 | 29/05/2025 | 08–09/01/2026 |
+
+- Outro universo (ADTV, um índice só, `codes`) só como teste de
+  sensibilidade, com o universo escrito na configuração do resultado.
+- O default de `BacktestConfig` continua sendo o universo por ADTV; quem roda
+  o backtest passa `universe_index` explicitamente.
 
 ## Motivação
 

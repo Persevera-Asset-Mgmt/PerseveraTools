@@ -25,6 +25,9 @@ livro fica vendido em mercado: β vs Ibov de −0,85 em Risk e −0,36 em Qualit
 
 ## Resultados (mesma configuração de [estilos-longo-prazo.md](estilos-longo-prazo.md))
 
+> **Universo antigo** (ADTV ≥ R$8 mi). O padrão agora é IBOV ∪ IBX100 ∪ SMLL
+> com `adtv_min=0` ([universo-por-indice.md](universo-por-indice.md)).
+
 | Estilo | Retorno a.a. | Sharpe | Max DD | β realizado |
 |---|---|---|---|---|
 | Value | 9,2% → 8,2% | 0,58 → 0,53 | −49% → −52% | 0,03 → −0,06 |
