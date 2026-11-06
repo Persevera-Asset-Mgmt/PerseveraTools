@@ -1,6 +1,6 @@
 # Análise do sinal, Sharpe sobre CDI e cobertura mínima de componentes
 
-- **Status:** Implementado (branch `factor-signal-analysis`)
+- **Status:** Implementado (PR #31)
 - **Atualizado em:** 2026-11-05
 
 ## O que mudou no motor
@@ -36,6 +36,12 @@ IBOV ∪ IBX100 ∪ SMLL com `adtv_min=0`, 2010-01-01 a 2026-10-27,
 `quantile=0.2`, `rebalance_freq="BME"`, `trading_cost_bps=10`,
 `one_class_per_issuer=True`. L/S com `beta_neutral=True`. CDI no período:
 10,1% a.a.; Ibovespa: 6,2% a.a.
+
+> **Pesos fixos.** As carteiras abaixo foram rodadas antes do PR #29, com o
+> engine que volta ao peso alvo todo dia (`weight_drift=False` reproduz). Com
+> drift, o padrão atual, os L/S perdem 0,9–2,2 p.p. ao ano
+> ([diagnostico-engine.md](diagnostico-engine.md)). As estatísticas do sinal
+> (IC, quintis, Fama-MacBeth) não dependem disso: usam o score e o preço.
 
 ## Carteiras: antes e depois
 

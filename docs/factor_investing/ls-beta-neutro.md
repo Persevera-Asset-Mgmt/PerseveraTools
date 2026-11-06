@@ -27,6 +27,10 @@ livro fica vendido em mercado: β vs Ibov de −0,85 em Risk e −0,36 em Qualit
 
 > **Universo antigo** (ADTV ≥ R$8 mi). O padrão agora é IBOV ∪ IBX100 ∪ SMLL
 > com `adtv_min=0` ([universo-por-indice.md](universo-por-indice.md)).
+>
+> Engine com pesos fixos entre rebalanceamentos, anterior ao drift
+> (`weight_drift=False` reproduz). Com drift o L/S beta-neutro perde 0,9–2,2 p.p.
+> ao ano e o drawdown piora; ver [diagnostico-engine.md](diagnostico-engine.md).
 
 | Estilo | Retorno a.a. | Sharpe | Max DD | β realizado |
 |---|---|---|---|---|

@@ -21,7 +21,8 @@ class BacktestDiagnostics:
     Diagnostic tables for a backtest run.
 
     ``rebals``
-        One row per formed rebalance: universe size, coverage, turnover, etc.
+        One row per formed rebalance: universe size, coverage, turnover, and
+        ``stale__<component>`` (universe values blanked for exceeding the age limit).
     ``events``
         Sparse event log (``price_gap``, ``renorm``, ``dropped_at_rebal``) with
         columns ``date``, ``code``, ``event``, ``detail``.
@@ -217,6 +218,7 @@ def summarize_diagnostics(diagnostics: BacktestDiagnostics) -> dict[str, Any]:
         "pct_days_with_renorm": float("nan"),
         "avg_names": float("nan"),
         "avg_turnover": float("nan"),
+        "n_stale_values": 0,
     }
     if not events.empty and "event" in events.columns:
         counts = events["event"].value_counts()
@@ -234,6 +236,9 @@ def summarize_diagnostics(diagnostics: BacktestDiagnostics) -> dict[str, Any]:
         out["avg_names"] = float(names.mean())
     if "turnover" in rebals.columns:
         out["avg_turnover"] = float(rebals["turnover"].mean())
+    stale_cols = [c for c in rebals.columns if str(c).startswith("stale__")]
+    if stale_cols:
+        out["n_stale_values"] = int(rebals[stale_cols].fillna(0).to_numpy().sum())
     return out
 
 

@@ -1,0 +1,48 @@
+# Testes offline (sem banco, Fibery ou Bloomberg) em dois ambientes:
+# - dev: versões do uv.lock.
+# - prod-bloomberg: igual ao PC Bloomberg que roda os jobs agendados
+#   (Windows, Python 3.11, pandas 2.2.2, numpy 1.26).
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dev:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Instalar dependências do lock
+        run: uv sync --extra dev --frozen
+      - name: Testes
+        run: uv run --frozen pytest -q tests/
+
+  prod-bloomberg:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+      - name: Instalar com as versões do PC Bloomberg
+        run: |
+          uv venv
+          uv pip install -e . pytest "pandas==2.2.2" "numpy==1.26.4"
+      - name: Conferir versões
+        run: .venv\Scripts\python.exe -c "import sys, pandas, numpy; print(sys.version.split()[0], pandas.__version__, numpy.__version__)"
+      - name: Testes
+        run: .venv\Scripts\python.exe -m pytest -q tests/

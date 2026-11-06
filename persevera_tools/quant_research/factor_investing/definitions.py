@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+import logging
+from typing import Mapping, Optional, Sequence
 
 import pandas as pd
 
 from ...db.fibery import read_fibery
+from .config import DEFAULT_MAX_AGE_BY_FREQUENCY
+
+logger = logging.getLogger(__name__)
 
 _FACTOR_TABLE = "Inv-Rsrch-Quant/Definições dos Fatores"
 _ASSETS_TABLE = "Inv-Taxonomia/Ativos"
@@ -14,7 +18,17 @@ _ASSETS_TABLE = "Inv-Taxonomia/Ativos"
 _DEFINITIONS_CACHE: Optional[pd.DataFrame] = None
 _ASSETS_CACHE: Optional[pd.DataFrame] = None
 
-_KEEP_COLS = ["Name", "Alias", "Descrição", "Maior Melhor", "Estilo"]
+_KEEP_COLS = ["Name", "Alias", "Descrição", "Maior Melhor", "Estilo", "Frequência"]
+
+# Name rules for derived factors whose Fibery ``Frequência`` is empty.
+_DAILY_PREFIXES = (
+    "momentum_", "delta_", "median_", "volatility_", "rsi_", "beta", "price_range",
+)
+_QUARTERLY_MARKERS = (
+    "_margin", "_growth_1y", "_variability", "_trend_deviation",
+    "accruals_", "operating_leverage", "roe", "roic", "roa", "roce",
+)
+_FALLBACK_FREQUENCY = "Trimestral"
 _ASSET_KEEP_COLS = ["Name", "Denominação", "Instrumento"]
 _DEFAULT_INSTRUMENTS = ("Ação",)
 
@@ -30,7 +44,7 @@ def load_factor_definitions(*, force_reload: bool = False) -> pd.DataFrame:
     """
     Load active factor definitions from Fibery.
 
-    Returns columns: Name, Alias, Descrição, Maior Melhor, Estilo.
+    Returns columns: Name, Alias, Descrição, Maior Melhor, Estilo, Frequência.
     """
     global _DEFINITIONS_CACHE
     if _DEFINITIONS_CACHE is not None and not force_reload:
@@ -170,6 +184,60 @@ def get_higher_is_better_map(
     if defs.empty:
         return {}
     return defs.set_index("Name")["Maior Melhor"].astype(bool).to_dict()
+
+
+def infer_frequency(name: str) -> Optional[str]:
+    """Guess ``Frequência`` from a factor mnemonic; ``None`` when no rule applies."""
+    text = str(name)
+    if text.endswith("_fwd"):
+        return "Consenso"
+    if text.startswith(_DAILY_PREFIXES):
+        return "Diário"
+    if any(marker in text for marker in _QUARTERLY_MARKERS):
+        return "Trimestral"
+    return None
+
+
+def get_component_max_age(
+    components: Sequence[str],
+    definitions: Optional[pd.DataFrame] = None,
+    *,
+    max_age_by_frequency: Optional[Mapping[str, int]] = None,
+    overrides: Optional[Mapping[str, int]] = None,
+) -> dict[str, int]:
+    """
+    Return ``{component: max age in calendar days}``.
+
+    Precedence: ``overrides`` → Fibery ``Frequência`` → ``infer_frequency`` →
+    ``Trimestral`` (logged as a warning, being the loosest bounded limit).
+    """
+    by_freq = {**DEFAULT_MAX_AGE_BY_FREQUENCY, **dict(max_age_by_frequency or {})}
+    defs = load_factor_definitions() if definitions is None else definitions
+    freq_map: dict[str, object] = {}
+    if not defs.empty and "Frequência" in defs.columns:
+        freq_map = defs.set_index("Name")["Frequência"].to_dict()
+
+    out: dict[str, int] = {}
+    unresolved: list[str] = []
+    for comp in components:
+        if overrides and comp in overrides:
+            out[comp] = int(overrides[comp])
+            continue
+        freq = freq_map.get(comp)
+        if not isinstance(freq, str) or freq not in by_freq:
+            freq = infer_frequency(comp)
+        if freq is None:
+            freq = _FALLBACK_FREQUENCY
+            unresolved.append(comp)
+        out[comp] = int(by_freq[freq])
+    if unresolved:
+        logger.warning(
+            "No Frequência for %s; using %s age limit (%d days)",
+            unresolved,
+            _FALLBACK_FREQUENCY,
+            by_freq[_FALLBACK_FREQUENCY],
+        )
+    return out
 
 
 def resolve_component_names(
