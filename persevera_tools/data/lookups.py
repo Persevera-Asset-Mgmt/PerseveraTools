@@ -3,7 +3,6 @@ import pandas as pd
 from typing import Dict, Optional
 
 from ..config import settings
-from ..db.operations import read_sql
 from ..db.fibery import read_fibery
 
 _DENOMINATION_TO_EXCHANGE = {
@@ -11,16 +10,6 @@ _DENOMINATION_TO_EXCHANGE = {
     'USD': 'US',
 }
 
-
-def get_codes(source: Optional[str] = None, category: Optional[str] = None) -> Dict[str, str]:
-    """Get codes from indicadores_definicoes table."""
-    query = "SELECT * FROM indicadores_definicoes"
-    if source:
-        query += f" WHERE source = '{source}'"
-    df = read_sql(query)
-    df = df[df['category'] == category] if category else df
-    df = df.set_index('raw_code')
-    return df['code'].to_dict()
 
 def get_securities_by_exchange(exchange: Optional[str] = None) -> Dict[str, str]:
     """

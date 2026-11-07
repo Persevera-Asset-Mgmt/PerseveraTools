@@ -4,7 +4,6 @@ import numpy as np
 import sidrapy
 
 from .base import DataProvider, DataRetrievalError
-from ..lookups import get_codes
 
 class SidraProvider(DataProvider):
     """Provider for IBGE's SIDRA data."""
@@ -20,21 +19,24 @@ class SidraProvider(DataProvider):
     def __init__(self, start_date: str = '1980-01-01'):
         super().__init__(start_date)
     
-    def get_data(self, category: str, tables: Optional[Dict[str, str]] = None, **kwargs) -> pd.DataFrame:
+    def get_data(self, category: str, tables: Optional[Dict[str, str]] = None,
+                 codes_map: Optional[Dict[str, str]] = None, **kwargs) -> pd.DataFrame:
         """
         Retrieve data from SIDRA.
-        
+
         Args:
             tables: Optional dictionary mapping table codes to descriptions.
                    If not provided, uses DEFAULT_TABLES
-            
+            codes_map: Obrigatório. Código da série SIDRA (coluna D3N) →
+                código interno. Séries fora do mapa são descartadas.
+
         Returns:
             DataFrame with columns: ['date', 'code', 'field', 'value']
         """
         self._log_processing(category)
-        
+
         tables = tables or self.DEFAULT_TABLES
-        securities_list = get_codes(source=category)
+        securities_list = self._require_codes_map(codes_map, category)
         df = pd.DataFrame()
         
         for code in tables.keys():

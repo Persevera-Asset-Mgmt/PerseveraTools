@@ -5,7 +5,6 @@ import warnings
 from datetime import datetime, timedelta
 import numpy as np
 import io
-from ..lookups import get_codes
 from .base import DataProvider, DataRetrievalError
 from ...utils.logging import get_logger
 
@@ -31,7 +30,7 @@ class AnbimaProvider(DataProvider):
         self._log_processing(category)
         
         if category == 'anbima_indices':
-            return self._read_anbima_files()
+            return self._read_anbima_files(kwargs.get('codes_map'), category)
         elif category == 'anbima_debentures':
             return self.get_debentures_data(category, **kwargs)
         elif category == 'anbima_titulos_publicos':
@@ -48,9 +47,9 @@ class AnbimaProvider(DataProvider):
             
         # return self._validate_output(df)
 
-    def _read_anbima_files(self) -> pd.DataFrame:
-        """Read ANBIMA files from URL."""
-        securities_list = get_codes(source='anbima')
+    def _read_anbima_files(self, codes_map: Optional[Dict[str, str]], category: str) -> pd.DataFrame:
+        """Read ANBIMA files from URL. `codes_map`: URL do arquivo → código interno."""
+        securities_list = self._require_codes_map(codes_map, category)
         data_frames = []
 
         for url, index_name in securities_list.items():

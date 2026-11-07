@@ -4,7 +4,6 @@ import requests
 from datetime import datetime, timedelta
 
 from .base import DataProvider, DataRetrievalError
-from ..lookups import get_codes
 
 class SGSProvider(DataProvider):
     """Provider for Brazilian Central Bank (SGS) data."""
@@ -12,16 +11,20 @@ class SGSProvider(DataProvider):
     def __init__(self, start_date: str = '1980-01-01'):
         super().__init__(start_date)
     
-    def get_data(self, category: str, **kwargs) -> pd.DataFrame:
+    def get_data(self, category: str, codes_map: Optional[Dict[str, str]] = None, **kwargs) -> pd.DataFrame:
         """
         Retrieve data from SGS.
-        
+
+        Args:
+            codes_map: Obrigatório. Código SGS → código interno,
+                ex.: {'432': 'brl_selic_target'}.
+
         Returns:
             DataFrame with columns: ['date', 'code', 'field', 'value']
         """
         self._log_processing(category)
-        
-        securities_list = get_codes(source=category)
+
+        securities_list = self._require_codes_map(codes_map, category)
         df = pd.DataFrame()
         
         for code in securities_list.keys():

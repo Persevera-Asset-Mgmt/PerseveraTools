@@ -6,7 +6,7 @@ import time
 import os
 
 from .base import DataProvider, DataRetrievalError
-from ..lookups import get_codes, get_securities_by_exchange
+from ..lookups import get_securities_by_exchange
 from ...config import settings
 from ...db.fibery import read_fibery
 

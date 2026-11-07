@@ -4,7 +4,6 @@ import time
 from fredapi import Fred
 
 from .base import DataProvider, DataRetrievalError
-from ..lookups import get_codes
 from ...config import settings
 from ...utils.logging import get_logger, timed
 
@@ -33,16 +32,20 @@ class FredProvider(DataProvider):
         logger.info(f"FRED API key: {FRED_API_KEY}")
         logger.info(f"FRED rate limiting: {request_delay}s delay, {max_retries} max retries")
     
-    def get_data(self, category: str, **kwargs) -> pd.DataFrame:
+    def get_data(self, category: str, codes_map: Optional[Dict[str, str]] = None, **kwargs) -> pd.DataFrame:
         """
         Retrieve data from FRED.
-        
+
+        Args:
+            codes_map: Obrigatório. Série FRED → código interno,
+                ex.: {'UNRATE': 'us_unemployment_rate'}.
+
         Returns:
             DataFrame with columns: ['date', 'code', 'field', 'value']
         """
         self._log_processing(category)
-        
-        securities_list = get_codes(source=category)
+
+        securities_list = self._require_codes_map(codes_map, category)
         
         # Retrieve data with rate limiting and retry logic
         data_dict = {}

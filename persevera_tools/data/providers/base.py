@@ -145,6 +145,22 @@ class DataProvider(ABC):
             parsed = pd.to_datetime(dates.astype(str), format='%Y%m%d', errors='coerce')
         return parsed
 
+    @staticmethod
+    def _require_codes_map(codes_map: Optional[Dict[str, str]], category: str) -> Dict[str, str]:
+        """
+        Valida o mapeamento código externo → código interno passado pelo chamador.
+
+        Os providers sgs, fred, sidra e anbima (índices) liam esse mapeamento da
+        tabela `indicadores_definicoes`, que não existe mais. Agora ele precisa
+        vir em `codes_map`; sem ele, o provider não sabe o que buscar.
+        """
+        if not codes_map:
+            raise ValueError(
+                f"'{category}' exige `codes_map` (dict código externo → código interno), "
+                "ex.: get_data(source='sgs', codes_map={'432': 'brl_selic_target'})."
+            )
+        return dict(codes_map)
+
     def _log_processing(self, category: str) -> None:
         """
         Log that we're processing a category.
