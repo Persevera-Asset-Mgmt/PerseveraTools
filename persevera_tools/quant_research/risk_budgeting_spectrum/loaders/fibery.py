@@ -570,7 +570,9 @@ def _livro_column(df: pd.DataFrame, table_name: str) -> np.ndarray:
     for value in df[col].tolist():
         if isinstance(value, dict):
             value = value.get("Name") or value.get("name") or value.get("enum/name")
-        if value is None or (isinstance(value, float) and np.isnan(value)) or str(value).strip() == "":
+        # read_fibery devolve pd.NA (não None/NaN) quando a coluna mistura
+        # valores preenchidos e vazios.
+        if value is None or (np.ndim(value) == 0 and pd.isna(value)) or str(value).strip() == "":
             out.append(LIVRO_ONSHORE)
             continue
         try:
