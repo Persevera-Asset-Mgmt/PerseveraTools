@@ -112,6 +112,7 @@ class SpectrumConfig:
     calibration_name: Optional[str] = None
     calibration_date: Optional[str] = None
     calibration_status: Optional[str] = None
+    calibration_livro: Optional[str] = None    # "Onshore" ou "Offshore"
 
     # ── Propriedades derivadas ───────────────────────────────────────────
 

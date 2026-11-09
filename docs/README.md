@@ -36,3 +36,4 @@ mostraram e o que ainda está em aberto.
 | [monitoring/validacao-diaria.md](monitoring/validacao-diaria.md) | Implementado (este PR) | Validação diária das rotinas agendadas pelo banco: checagens, limites e o que a primeira execução encontrou |
 | [data/providers-tabelas-n8n.md](data/providers-tabelas-n8n.md) | Aprendizado | Tabela de destino de cada provider, chaves do upsert e workflows do n8n que replicam a carga |
 | [risk_budgeting_spectrum/calibracao.md](risk_budgeting_spectrum/calibracao.md) | Aprendizado | Calibração do Motor RBS no Fibery e problemas conhecidos |
+| [risk_budgeting_spectrum/offshore.md](risk_budgeting_spectrum/offshore.md) | Proposta (loader por livro neste PR) | RBS offshore em USD: decisões de desenho, classes, protótipo e campo Livro no Fibery |

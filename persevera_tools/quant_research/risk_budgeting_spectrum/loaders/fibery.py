@@ -12,10 +12,20 @@ Estratégia de falha: explícita. Se qualquer pull falhar, a calibração estive
 incompleta, ou os dados estiverem inconsistentes, levanta exception com
 mensagem clara — sem fallback silencioso.
 
+Livro (Onshore / Offshore): campo de seleção única em Calibração de Mercado e
+em Classes de Ativo. O universo de uma calibração são as classes do mesmo
+livro. Campo ausente ou vazio conta como "Onshore", para que o cadastro
+anterior ao offshore continue carregando sem mudança.
+
+Campos opcionais em Parâmetros de Classe:
+  • "RC Intra-Bucket": divisão do RC do bucket entre suas classes (pesos
+    relativos, renormalizados no motor). Bucket sem nenhum valor → uniforme.
+
 Uso:
-    from persevera_tools.quant_research.hrp.loaders import load_from_fibery
-    config = load_from_fibery()                    # mais recente Aprovada
-    config = load_from_fibery(status="Rascunho")   # mais recente Rascunho
+    from persevera_tools.quant_research.risk_budgeting_spectrum.loaders import load_from_fibery
+    config = load_from_fibery()                    # Onshore, mais recente Aprovada
+    config = load_from_fibery(status="Rascunho")   # Onshore, mais recente Rascunho
+    config = load_from_fibery(livro="Offshore")    # Offshore, mais recente Aprovada
     config = load_calibration_by_date("2026-05-04")
     config = load_calibration_by_name("Calibração de Mercado 2026-05-04")
 """
@@ -45,6 +55,12 @@ DB_PARAMETERS     = f"{SPACE_NAME}/Parâmetros de Classe"
 DB_RC_TARGET      = f"{SPACE_NAME}/RC Target por Bucket"
 DB_CORR_CLASSES   = f"{SPACE_NAME}/Correlação Cross-Classe"
 
+LIVRO_ONSHORE     = "Onshore"
+LIVRO_OFFSHORE    = "Offshore"
+LIVROS            = (LIVRO_ONSHORE, LIVRO_OFFSHORE)
+_LIVRO_COLUMNS    = ["Livro", f"{SPACE_NAME}/Livro", "livro"]
+_RC_INTRA_COLUMNS = ["RC Intra-Bucket", f"{SPACE_NAME}/RC Intra-Bucket", "rc_intra"]
+
 
 class FiberyLoaderError(Exception):
     """Erro específico do loader Fibery (dados ausentes/inconsistentes)."""
@@ -53,77 +69,71 @@ class FiberyLoaderError(Exception):
 
 # ── API pública ───────────────────────────────────────────────────────────────
 
-def load_from_fibery(status: Optional[str] = "Aprovada") -> SpectrumConfig:
+def load_from_fibery(
+    status: Optional[str] = "Aprovada",
+    livro: str = LIVRO_ONSHORE,
+) -> SpectrumConfig:
     """
-    Carrega a Calibração mais recente em status especificado.
+    Carrega a Calibração mais recente do livro em status especificado.
 
     Parâmetros
     ----------
     status : str ou None
         Filtro por status do workflow. Default: "Aprovada".
         Se None, pega a mais recente independente de status.
+    livro : "Onshore" (default) ou "Offshore".
 
     Levanta
     -------
-    FiberyLoaderError : se nenhuma calibração no status existir, ou se a
-        calibração mais recente estiver incompleta.
+    FiberyLoaderError : se nenhuma calibração do livro no status existir, ou se
+        a calibração mais recente estiver incompleta.
     """
+    livro = _check_livro(livro)
     calib_df = _read_calibrations()
+    calib_df = calib_df[calib_df["livro"] == livro]
 
     if status is not None:
         calib_df = calib_df[calib_df["status"] == status]
-        if calib_df.empty:
-            raise FiberyLoaderError(
-                f"Nenhuma Calibração de Mercado em status '{status}' encontrada no Fibery"
-            )
+    if calib_df.empty:
+        filtro = f" em status '{status}'" if status is not None else ""
+        raise FiberyLoaderError(
+            f"Nenhuma Calibração de Mercado do livro '{livro}'{filtro} encontrada no Fibery"
+        )
 
     # Mais recente por Data Calibração (desempate: created date se houver)
     calib_df = calib_df.sort_values("data_calibracao", ascending=False)
-    calib_row = calib_df.iloc[0]
-
-    return _build_config_from_calibration(
-        calibration_name=calib_row["name"],
-        calibration_date=str(calib_row["data_calibracao"]),
-        calibration_status=calib_row["status"],
-        sigma_min=calib_row["sigma_min"],
-        sigma_max=calib_row["sigma_max"],
-        n_profiles=calib_row["n_profiles"],
-        min_weight_threshold=calib_row["min_weight_threshold"],
-    )
+    return _build_config_from_row(calib_df.iloc[0])
 
 
 def load_calibration_by_name(calibration_name: str) -> SpectrumConfig:
-    """Carrega calibração específica por ID (UUID do Fibery)."""
+    """Carrega calibração específica pelo nome. O livro vem da própria calibração."""
     calib_df = _read_calibrations()
     match = calib_df[calib_df["name"] == calibration_name]
     if match.empty:
         raise FiberyLoaderError(f"Calibração com nome '{calibration_name}' não encontrada")
-    row = match.iloc[0]
-    return _build_config_from_calibration(
-        calibration_name=row["name"],
-        calibration_date=str(row["data_calibracao"]),
-        calibration_status=row["status"],
-        sigma_min=row["sigma_min"],
-        sigma_max=row["sigma_max"],
-        n_profiles=row["n_profiles"],
-        min_weight_threshold=row["min_weight_threshold"],
-    )
+    return _build_config_from_row(match.iloc[0])
 
 
-def load_calibration_by_date(date: str) -> SpectrumConfig:
+def load_calibration_by_date(date: str, livro: str = LIVRO_ONSHORE) -> SpectrumConfig:
     """
-    Carrega calibração com Data Calibração específica.
+    Carrega calibração do livro com Data Calibração específica.
     `date` no formato 'YYYY-MM-DD'.
     """
+    livro = _check_livro(livro)
     calib_df = _read_calibrations()
-    match = calib_df[calib_df["data_calibracao"].astype(str) == date]
+    match = calib_df[
+        (calib_df["data_calibracao"].astype(str) == date) & (calib_df["livro"] == livro)
+    ]
     if match.empty:
-        raise FiberyLoaderError(f"Calibração com data '{date}' não encontrada")
+        raise FiberyLoaderError(f"Calibração do livro '{livro}' com data '{date}' não encontrada")
     if len(match) > 1:
         raise FiberyLoaderError(
-            f"Múltiplas calibrações com data '{date}' — use load_calibration_by_name"
+            f"Múltiplas calibrações do livro '{livro}' com data '{date}' — use load_calibration_by_name"
         )
-    row = match.iloc[0]
+    return _build_config_from_row(match.iloc[0])
+
+
+def _build_config_from_row(row: pd.Series) -> SpectrumConfig:
     return _build_config_from_calibration(
         calibration_name=row["name"],
         calibration_date=str(row["data_calibracao"]),
@@ -132,6 +142,7 @@ def load_calibration_by_date(date: str) -> SpectrumConfig:
         sigma_max=row["sigma_max"],
         n_profiles=row["n_profiles"],
         min_weight_threshold=row["min_weight_threshold"],
+        livro=row["livro"],
     )
 
 
@@ -145,12 +156,19 @@ def _build_config_from_calibration(
     sigma_max: float,
     n_profiles: int,
     min_weight_threshold: float,
+    livro: str = LIVRO_ONSHORE,
 ) -> SpectrumConfig:
     """
     Pull de todas as tabelas filhas da calibração e montagem da SpectrumConfig.
     """
-    # 1. Catálogo de classes (independente de calibração)
+    # 1. Catálogo de classes do livro da calibração
     classes_df = _read_classes_catalog()
+    classes_df = classes_df[classes_df["livro"] == livro].reset_index(drop=True)
+    if classes_df.empty:
+        raise FiberyLoaderError(
+            f"Nenhuma Classe de Ativo do livro '{livro}' no catálogo "
+            f"(calibração '{calibration_name}')"
+        )
 
     # 2. Parâmetros desta calibração
     params_df = _read_parameters(calibration_name)
@@ -253,6 +271,9 @@ def _build_config_from_calibration(
     # Se nenhum bucket definiu curvatura, passa None (motor usa linear puro).
     rc_curvature_arg = rc_curvature if rc_curvature else None
 
+    # ── Divisão do RC dentro de cada bucket (opcional)
+    intra_rc_weights = _build_intra_rc_weights(merged, bucket_order)
+
     # ── Matriz de correlação completa (n × n, todos os pares)
     full_corr = _build_full_corr_matrix(assets, corr_df)
 
@@ -299,9 +320,11 @@ def _build_config_from_calibration(
         n_profiles=int(n_profiles),
         min_weight_threshold=float(min_weight_threshold),
         rc_curvature=rc_curvature_arg,
+        intra_rc_weights=intra_rc_weights,
         calibration_name=calibration_name,
         calibration_date=calibration_date,
         calibration_status=calibration_status,
+        calibration_livro=livro,
     )
 
     # Valida antes de retornar — falha cedo se algo estiver inconsistente
@@ -327,7 +350,7 @@ def _read_calibrations() -> pd.DataFrame:
             f"Falha ao ler '{DB_CALIBRATION}' do Fibery: {exc}"
         ) from exc
 
-    return _normalize_columns(df, {
+    norm = _normalize_columns(df, {
         "id":                   ["fibery/id", "id", "Id"],
         "name":                 ["Inv-Rsrch-Quant/Name", "Name", "name"],
         "data_calibracao":      ["Inv-Rsrch-Quant/Data Calibração", "Data Calibração", "data_calibracao"],
@@ -337,6 +360,8 @@ def _read_calibrations() -> pd.DataFrame:
         "n_profiles":           ["Inv-Rsrch-Quant/N Profiles", "N Profiles", "n_profiles"],
         "min_weight_threshold": ["Inv-Rsrch-Quant/Min Weight Threshold", "Min Weight Threshold", "min_weight_threshold"],
     }, table_name=DB_CALIBRATION)
+    norm["livro"] = _livro_column(df, DB_CALIBRATION)
+    return norm
 
 
 def _read_classes_catalog() -> pd.DataFrame:
@@ -351,12 +376,14 @@ def _read_classes_catalog() -> pd.DataFrame:
             f"Falha ao ler '{DB_ASSET_CLASS}' do Fibery: {exc}"
         ) from exc
 
-    return _normalize_columns(df, {
+    norm = _normalize_columns(df, {
         "id": ["fibery/id", "id"],
         "name": ["Inv-Rsrch-Quant/Name", "Name", "name"],
         "bucket": ["Classificação Layer 1", "bucket", "Bucket"],
         "proxy": ["Proxy", "proxy"],
     }, table_name=DB_ASSET_CLASS)
+    norm["livro"] = _livro_column(df, DB_ASSET_CLASS)
+    return norm
 
 
 def _read_parameters(calibration_name: str) -> pd.DataFrame:
@@ -371,7 +398,7 @@ def _read_parameters(calibration_name: str) -> pd.DataFrame:
             f"Falha ao ler '{DB_PARAMETERS}' do Fibery: {exc}"
         ) from exc
 
-    df = _normalize_columns(df, {
+    norm = _normalize_columns(df, {
         "calibration_name": ["Calibração", "calibracao_id", "Calibracao"],
         "class_id": ["Classe", "classe_id"],
         "default_vol": ["Default Vol", "default_vol"],
@@ -379,8 +406,12 @@ def _read_parameters(calibration_name: str) -> pd.DataFrame:
         "max_rc": ["Max RC", "max_rc"]
     }, table_name=DB_PARAMETERS)
 
+    # RC Intra-Bucket — opcional, como a Curvatura RC.
+    intra_col = next((c for c in _RC_INTRA_COLUMNS if c in df.columns), None)
+    norm["rc_intra"] = df[intra_col].values if intra_col is not None else np.nan
+
     # Filtra pela calibração
-    return df[df["calibration_name"] == calibration_name].copy()
+    return norm[norm["calibration_name"] == calibration_name].copy()
 
 
 def _read_rc_targets(calibration_name: str) -> pd.DataFrame:
@@ -514,6 +545,73 @@ def _build_full_corr_matrix(
         )
 
     return M
+
+
+# ── Livro e RC intra-bucket ───────────────────────────────────────────────────
+
+def _check_livro(livro: str) -> str:
+    """Normaliza o livro pedido pelo chamador ('offshore' → 'Offshore')."""
+    norm = {lv.lower(): lv for lv in LIVROS}.get(str(livro).strip().lower())
+    if norm is None:
+        raise FiberyLoaderError(f"Livro '{livro}' inválido; use um de {list(LIVROS)}")
+    return norm
+
+
+def _livro_column(df: pd.DataFrame, table_name: str) -> np.ndarray:
+    """
+    Coluna Livro normalizada. Campo ausente ou valor vazio → "Onshore"
+    (cadastro anterior ao offshore). Valor fora de Onshore/Offshore → erro.
+    """
+    col = next((c for c in _LIVRO_COLUMNS if c in df.columns), None)
+    if col is None:
+        return np.full(len(df), LIVRO_ONSHORE, dtype=object)
+
+    out = []
+    for value in df[col].tolist():
+        if isinstance(value, dict):
+            value = value.get("Name") or value.get("name") or value.get("enum/name")
+        if value is None or (isinstance(value, float) and np.isnan(value)) or str(value).strip() == "":
+            out.append(LIVRO_ONSHORE)
+            continue
+        try:
+            out.append(_check_livro(value))
+        except FiberyLoaderError as exc:
+            raise FiberyLoaderError(f"{table_name}: {exc}") from exc
+    return np.array(out, dtype=object)
+
+
+def _build_intra_rc_weights(
+    merged: pd.DataFrame,
+    bucket_order: list[str],
+) -> Optional[dict[str, np.ndarray]]:
+    """
+    Divisão do RC entre as classes de cada bucket, a partir de "RC Intra-Bucket".
+
+    Bucket sem nenhum valor → uniforme (fica fora do dict). Bucket com valores
+    em só parte das classes, valor negativo ou soma zero → erro: preenchimento
+    parcial quase sempre é esquecimento, e o motor não deve adivinhar.
+    """
+    if "rc_intra" not in merged.columns:
+        return None
+
+    weights: dict[str, np.ndarray] = {}
+    for bk in bucket_order:
+        rows = merged[merged["bucket"] == bk]
+        vals = pd.to_numeric(rows["rc_intra"], errors="coerce")
+        if vals.isna().all():
+            continue
+        if vals.isna().any():
+            faltando = rows.loc[vals.isna(), "name"].tolist()
+            raise FiberyLoaderError(
+                f"Bucket '{bk}': RC Intra-Bucket preenchido só em parte das "
+                f"classes; faltam {faltando}"
+            )
+        if (vals < 0).any() or vals.sum() <= 0:
+            raise FiberyLoaderError(
+                f"Bucket '{bk}': RC Intra-Bucket deve ser >= 0 com soma > 0"
+            )
+        weights[bk] = vals.to_numpy(dtype=float)
+    return weights or None
 
 
 # ── Utilitários ───────────────────────────────────────────────────────────────
