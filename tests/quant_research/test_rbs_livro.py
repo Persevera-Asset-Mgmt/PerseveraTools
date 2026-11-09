@@ -90,6 +90,17 @@ def test_livro_vazio_conta_como_onshore():
     assert _load(t).calibration_name == ON
 
 
+@pytest.mark.parametrize("vazio", [pd.NA, np.nan, None, ""])
+def test_livro_vazio_em_coluna_mista_conta_como_onshore(vazio):
+    # read_fibery devolve pd.NA nos vazios quando a coluna tem valores preenchidos.
+    t = _tables(calib_livros=(vazio, "Offshore"))
+    classes = t[ld.DB_ASSET_CLASS].astype({"Livro": object})
+    classes.loc[classes["Livro"] == "Onshore", "Livro"] = vazio
+    t[ld.DB_ASSET_CLASS] = classes
+    assert _load(t).calibration_name == ON
+    assert _load(t, livro="Offshore").calibration_name == OFF
+
+
 def test_sem_calibracao_do_livro_falha():
     t = _tables(calib_livros=("Onshore", "Onshore"))
     with pytest.raises(ld.FiberyLoaderError, match="Offshore"):

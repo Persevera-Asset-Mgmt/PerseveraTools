@@ -129,6 +129,24 @@ cadastradas antes do passo 2, o RBS onshore quebra no Hub e no Dashboard.
 Os CSVs para importação saem de `scripts/rbs_offshore_calibracao.py`
 (classes, parâmetros, 91 correlações, RC targets e os dados da calibração).
 
+### Estado em 2026-11-09
+- "Calibração Offshore - 2026-11-09" cadastrada em Rascunho, com as 14
+  classes "Off …", 14 parâmetros, 3 RC targets e 91 correlações. O espectro
+  calculado a partir do Fibery bate com o protótipo.
+- Name da calibração inclui o livro: "Calibração Onshore - …" /
+  "Calibração Offshore - …". Livro preenchido em todas as calibrações e
+  classes. Parâmetros, RC targets e correlações têm um campo calculado
+  `Livro` (da calibração) para filtro.
+- Visões no space Inv-Rsrch-Quant: "RBS Onshore - Calibrações",
+  "RBS Offshore - Calibrações", "RBS Onshore - Classes", "RBS Offshore - Classes".
+- Relações 1:1 a cuidar: `Classes de Ativo.Proxy` ↔ `Indicadores` (por isso
+  o Off Bitcoin usa FBTC como proxy; `bitcoin_usd` é do Bitcoin onshore) e, até
+  2026-11-09, `RC Target por Bucket.Classificação Layer 1`, convertida para
+  N RC targets por bucket depois de criar os RC targets offshore ter desligado
+  os buckets dos onshore.
+- `read_fibery` devolve `pd.NA` nos vazios de uma coluna mista; o loader trata
+  como Onshore (PR #36).
+
 ## Em aberto
 
 - Janela mais longa com índices como proxy antes de cada ETF existir.
