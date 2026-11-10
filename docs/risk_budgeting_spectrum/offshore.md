@@ -1,6 +1,6 @@
 # RBS offshore: espectro de alocação em USD
 
-- **Status:** Proposta (loader por livro e gerador da calibração implementados neste PR; calibração ainda não cadastrada no Fibery)
+- **Status:** Proposta (loader por livro em PR #35, estimação par a par neste PR; calibração em Rascunho no Fibery)
 - **Atualizado em:** 2026-11-09
 
 ## Ponto de partida
@@ -54,27 +54,44 @@ IGIB (IEF), CTA/IALT (DBMF), GLDM (ouro) e FBTC (bitcoin):
 
 ## Classes (14)
 
-| Bucket | Classe | Proxy | Max Weight | RC Intra |
-|---|---|---|---|---|
-| RF | Off Pós-fixado | USFR | 40% | |
-| RF | Off Treasury Curto | SHY | 100% | |
-| RF | Off Treasury 7-10 | IEF | 100% | |
-| RF | Off TIPS | STIP | 100% | |
-| RF | Off Crédito IG | SLQD | 100% | |
-| RF | Off Crédito HY | ANGL | 15% | |
-| RF | Off MBS | MBB | 20% | |
-| Alt | Off Trend | DBMF | 20% | |
-| Alt | Off Ouro | ouro | 15% | |
-| Alt | Off Bitcoin | bitcoin | 5% (Max RC 20%) | |
-| RV | Off Ações EUA | SPYM | 60% | 60% |
-| RV | Off Ações DM ex-EUA | IEFA | 30% | 22% |
-| RV | Off Ações EM | FRDM | 20% | 12% |
-| RV | Off Imobiliário | REET | 10% | 6% |
+Nomes e proxies como estão no Fibery (2026-11-09). A Proxy é um índice de
+histórico longo (retorno total, USD); o ETF de implementação é separado.
 
-O prefixo "Off" evita nomes repetidos entre livros: Parâmetros e Correlações
-se ligam às classes pelo nome. Os Max Weight são chute inicial, a validar no
-comitê. RC Intra na RV segue aproximadamente o peso de mercado; sem ele, o
-motor divide o risco igualmente e EM fica com mais peso que EUA.
+| Bucket | Classe | Proxy | Ticker | Diário desde | Max Weight | RC Intra |
+|---|---|---|---|---|---|---|
+| RF | RF Pós-fixado | `us_bloomberg_tbill_index` | LD20TRUU | 2000 | 40% | |
+| RF | RF Treasury Curta | `us_bloomberg_treasury_1_3y_tr` | LT01TRUU | 2000 | 100% | |
+| RF | RF Treasury Longa | `us_treasuries_7_10y` | LT09TRUU | 1997 | 100% | |
+| RF | RF Inflação | `us_bloomberg_tips_0_5y_tr` | LTP5TRUU | 2010* | 100% | |
+| RF | RF Crédito IG | `us_bloomberg_corporate_ig_bond_index` | LUACTRUU | 1989 | 100% | |
+| RF | RF Crédito HY | `us_bloomberg_corporate_hy_bond_index` | LF98TRUU | 1999 | 15% | |
+| RF | MBS | `us_bloomberg_mbs_tr` | LUMSTRUU | 2000 | 20% | |
+| Alt | Systematic Trend | `DBMF` | DBMF US Equity | 2019 | 20% | |
+| Alt | Ouro | `gold` | XAU Comdty | 1980 | 15% | |
+| Alt | Bitcoin | `bitcoin_usd` | XBTUSD Curncy | 2011 | 5% (Max RC 20%) | |
+| RV | Ações EUA | `us_sp500_tr` | SPXT | 2000 | 60% | 60% |
+| RV | Ações DM ex-EUA | `msci_eafe_net_tr` | NDDUEAFE | 2000 | 30% | 22% |
+| RV | Ações EM | `msci_em_net_tr` | NDUEEGF | 2000 | 20% | 12% |
+| RV | Imobiliário | `ftse_epra_nareit_developed_tr` | TRNGLU | 2005 | 10% | 6% |
+
+\* LTP5TRUU tem dados desde 2002, mas com lacunas: os retornos semanais
+contínuos começam em jun/2010.
+
+Ouro e Bitcoin têm o mesmo nome nos dois livros; o loader filtra por livro, então
+isso funciona. Os Max Weight são chute inicial, a validar no comitê. RC Intra na
+RV segue aproximadamente o peso de mercado; sem ele, o motor divide o risco
+igualmente e EM fica com mais peso que EUA.
+
+Escolhas de proxy:
+- **SG Trend (NEIXCTAT) tem acesso restrito** no terminal; o ETF CTA (Simplify)
+  foi testado e descartado (correlação 0,42 com o DBMF, vol 17,8% contra 11,1%).
+  O trend fica com o DBMF, desde 2019. Alternativa futura: índice próprio de
+  time-series momentum com os ~60 futuros da base.
+- IG e HY usam índices amplos (LUACTRUU, LF98TRUU); os ETFs SLQD (0–5 anos) e
+  ANGL (fallen angels) medem um risco diferente. O UCITS mapeado (VDPA, IHYA)
+  já é amplo.
+- A relação `Classes de Ativo.Proxy` ↔ `Indicadores` passou a 1 indicador → N
+  classes, para Bitcoin compartilhar `bitcoin_usd` com o onshore.
 
 Tickers UCITS ainda a confirmar: T-bill 0–3 meses (ex.: IB01) no lugar de FLOA,
 TIPS 0–5, fallen angels ou HY, MBS, DM ex-EUA, imobiliário e DBMF.
@@ -147,9 +164,44 @@ Os CSVs para importação saem de `scripts/rbs_offshore_calibracao.py`
 - `read_fibery` devolve `pd.NA` nos vazios de uma coluna mista; o loader trata
   como Onshore (PR #36).
 
+## Reestimação com proxies-índice (2026-11-09)
+
+`scripts/rbs_offshore_calibracao.py --inicio 2005-01-01 --inicio-classe "Bitcoin=2014-01-01" --espectro`:
+vol de cada classe no próprio histórico, correlação par a par no período em
+comum (`estimation.estimate_class_stats(method="pairwise")`); a matriz já saiu
+PSD (ajuste 0). Bitcoin começa em 2014 porque 2010–2013 levava a vol a 92%.
+Demais parâmetros = calibração offshore de 2026-11-09.
+
+| Vol (%) | Ref. (ETFs 2019–26) | Nova |
+|---|---|---|
+| Ações EUA | 18,4 | 17,5 |
+| Ações EM | 23,3 | 20,9 |
+| Imobiliário | 24,1 | 21,0 |
+| RF Crédito IG | 4,5 | 6,1 |
+| RF Crédito HY | 11,7 | 7,6 |
+| MBS | 5,5 | 3,9 |
+| Bitcoin | 61,0 | 64,7 |
+
+Correlações que mais mudaram: ações EUA × Treasury 7–10 de 0,01 para −0,21
+(entra 2008); ações × ouro de 0,24 para 0,07; IG × Treasury 7–10 de 0,40 para
+0,73 (índice amplo tem duration).
+
+| | P1 | P3 | P5 | P7 | P9 | P10 |
+|---|---|---|---|---|---|---|
+| RF | 100% | 88% | 75% | 59% | 33% | 13% |
+| Alternativos | 0% | 7% | 9% | 11% | 15% | 18% |
+| RV | 0% | 6% | 16% | 30% | 52% | 69% |
+| Ações EUA | 0% | 6% | 11% | 17% | 32% | 41% |
+
+Os 10 perfis convergem. Com a janela longa o ouro passa a diversificar melhor
+e toma espaço do trend, que zera em P6, P7, P9 e P10. Parte disso vem de o trend
+ser estimado só desde 2019 (DBMF) enquanto as outras classes usam 2005–2026.
+
 ## Em aberto
 
-- Janela mais longa com índices como proxy antes de cada ETF existir.
-- Piso de 2% gera saltos (ouro zerado do P3 ao P5, 4,6% no P6).
+- Trend com histórico curto (DBMF desde 2019); índice próprio de TSMOM com os
+  futuros da base resolveria.
+- Piso de 2% gera saltos entre perfis (TIPS zera do P7 em diante, trend entra
+  no P8 e sai no P9).
 - Walk-forward fora da amostra.
 - Campos de ticker (US, UCITS, XP) no catálogo para gerar a cesta da IBKR.
