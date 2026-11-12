@@ -31,6 +31,13 @@ renda fixa, pesquisa quant (factor investing, risk budgeting) e integrações
   [docs/data/providers-tabelas-n8n.md](docs/data/providers-tabelas-n8n.md).
 - `renda_fixa_historico` (antes `credito_privado_historico`) é compartilhada por
   vários providers; a chave do upsert inclui `source`.
+- Desde 2026-11-11 ela guarda também títulos públicos, com o vencimento no code
+  (`NTN-B_2035-05-15`; `persevera_tools/data/tpf_codes.py`). Query que lista
+  códigos dessa tabela (ex.: debêntures para a Mais Retorno) precisa excluí-los;
+  query de TPF por data deve repetir o predicado do índice parcial
+  `renda_fixa_historico_tpf_field_date_idx` (a tabela tem ~28 mi de linhas e
+  nenhum índice por data). `anbima_titulos_publicos_historico` está em
+  desativação. Detalhes na seção TPF do mapa acima.
 
 ## Documentação
 - `docs/` guarda o *porquê*: aprendizados, diagnósticos e propostas, com

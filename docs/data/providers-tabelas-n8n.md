@@ -1,7 +1,7 @@
 # data: providers, tabelas e réplicas no n8n
 
 - **Status:** Aprendizado
-- **Atualizado em:** 2026-11-11
+- **Atualizado em:** 2026-11-12
 
 Vários providers têm um workflow no n8n que faz a mesma carga. Mudou tabela,
 campo, chave ou query de um lado, mude o outro. Fonte da tabela de destino:
@@ -13,7 +13,7 @@ campo, chave ou query de um lado, mude o outro. Fonte da tabela de destino:
 | Tabela | Chave | Observação |
 |---|---|---|
 | `renda_fixa_historico` | code, date, field, **source** | antes `credito_privado_historico` (renomeada em 2026-11-04, PR #24); vários providers gravam nela. Desde 2026-11-11 guarda também TPF, com o vencimento no code (ver abaixo) |
-| `anbima_titulos_publicos_historico` | code, date, **maturity**, field | mesmo título com preços diferentes por vencimento. Em transição: continua recebendo as cargas até os leitores migrarem para `renda_fixa_historico` |
+| `anbima_titulos_publicos_historico` | code, date, **maturity**, field | mesmo título com preços diferentes por vencimento. Em desativação: nenhum leitor conhecido usa mais (desde 2026-11-12), mas continua recebendo as cargas até a fase final (ver abaixo) |
 | `credito_privado_referencia` | code, date | vencimento da NTN-B de referência de debêntures e CRI/CRA |
 | `indicadores` | code, date, field | padrão |
 | demais | code, date, field | padrão de `get_data` |
@@ -69,12 +69,21 @@ Providers sem réplica conhecida no n8n: `anbima_debentures`, `anbima_cri_cra`,
   - `get_series(category='titulos_publicos')` (`persevera_tools/fixed_income/data.py`)
     lê `renda_fixa_historico` desde 2026-11-12 e devolve o mesmo formato de
     antes (`date, code, maturity, value`, com `code` = tipo, ex. `NTN-B`).
-    Usado pelo spread IPCA (`calculate_spread`), inclusive no Dashboard.
-  - Pendente: PerseveraHub lê `anbima_titulos_publicos_historico` direto com
-    SQL próprio (`backend/apps/dados/renda_fixa.py`: `curva_ntnb`,
-    `taxas_titulos_publicos`).
-- Fase final, pendente (depois do Hub): renomear a tabela antiga, criar uma
-  view de compatibilidade e tirar a gravação dupla.
+    Usado pelo spread IPCA (`calculate_spread`), inclusive no Dashboard (PR #38).
+  - PerseveraHub: `curva_ntnb` (Spreads por Emissor) e `taxas_titulos_publicos`
+    (duration dos títulos públicos), em `backend/apps/dados/renda_fixa.py`, leem
+    `renda_fixa_historico` desde 2026-11-12 (Hub PR #36, em produção). Conferido
+    no banco: mesmas 34.473 linhas da curva NTN-B e mesmas 50 taxas de
+    2026-11-11. Única diferença: o ponto NTN-B 2025-05-15 de 2020-01-08, que
+    tinha source NULL e agora entra na curva do Hub (registrado no
+    `divergencias.md` do Hub).
+- Fase final, pendente: renomear `anbima_titulos_publicos_historico` (ex.:
+  `_old`), criar uma view de compatibilidade com o mesmo nome (SQL em
+  `split_part`, como nos leitores) e tirar a gravação dupla do n8n
+  (`legacyTable` no nó "Normalizar + Montar Lotes SQL") e de
+  `FinancialDataService.get_data` (`tpf_dual_write_sources`). Pré-condições:
+  pacote reinstalado no PC Bloomberg (para os jobs Python já gravarem nas
+  duas tabelas) e alguns dias de cargas conferidas nas duas tabelas.
 
 ## Limites deste levantamento
 Feito pelos nomes e descrições dos workflows e, nos de renda fixa, pelo código
