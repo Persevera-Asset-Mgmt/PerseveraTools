@@ -20,6 +20,7 @@ from .providers.mdic import MDICProvider
 from .providers.b3 import B3Provider
 from .providers.mais_retorno import MaisRetornoProvider
 from .providers.investfy import InvestfyProvider
+from .tpf_codes import tpf_to_renda_fixa
 from ..db.operations import to_sql
 
 logger = logging.getLogger(__name__)
@@ -468,6 +469,14 @@ class FinancialDataService:
             'anbima_titulos_publicos_historico': ['code', 'date', 'maturity', 'field'],
         }
 
+        # TPF: durante a transição (desde 2026-11-11) grava também em
+        # renda_fixa_historico, com o vencimento no code (NTN-B_2035-05-15).
+        # Ver persevera_tools/data/tpf_codes.py e o workflow n8n wJU1cF110bRfljGZ.
+        tpf_dual_write_sources = {
+            'anbima_titulos_publicos',
+            'anbima_feed_titulos_publicos_mercado_secundario',
+        }
+
         provider, default_table = providers[source]
         default_primary_keys = table_primary_keys.get(
             table_name or default_table, ['code', 'date', 'field']
@@ -491,6 +500,19 @@ class FinancialDataService:
                     self.logger.info(f"Saving {len(df)} rows to '{db_table}'")
                     try:
                         df = self._save_to_db(df, db_table, effective_keys)
+                        if (
+                            source in tpf_dual_write_sources
+                            and db_table == 'anbima_titulos_publicos_historico'
+                        ):
+                            df_rf = tpf_to_renda_fixa(df)
+                            if not df_rf.empty:
+                                self.logger.info(
+                                    f"Saving {len(df_rf)} TPF rows to 'renda_fixa_historico'"
+                                )
+                                self._save_to_db(
+                                    df_rf, 'renda_fixa_historico',
+                                    table_primary_keys['renda_fixa_historico'],
+                                )
                     except Exception as e:
                         self.logger.error(f"Failed to save data to database: {str(e)}")
                         raise

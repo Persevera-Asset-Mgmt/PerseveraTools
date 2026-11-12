@@ -1,7 +1,7 @@
 # data: providers, tabelas e réplicas no n8n
 
 - **Status:** Aprendizado
-- **Atualizado em:** 2026-11-04
+- **Atualizado em:** 2026-11-11
 
 Vários providers têm um workflow no n8n que faz a mesma carga. Mudou tabela,
 campo, chave ou query de um lado, mude o outro. Fonte da tabela de destino:
@@ -12,8 +12,8 @@ campo, chave ou query de um lado, mude o outro. Fonte da tabela de destino:
 
 | Tabela | Chave | Observação |
 |---|---|---|
-| `renda_fixa_historico` | code, date, field, **source** | antes `credito_privado_historico` (renomeada em 2026-11-04, PR #24); vários providers gravam nela |
-| `anbima_titulos_publicos_historico` | code, date, **maturity**, field | mesmo título com preços diferentes por vencimento |
+| `renda_fixa_historico` | code, date, field, **source** | antes `credito_privado_historico` (renomeada em 2026-11-04, PR #24); vários providers gravam nela. Desde 2026-11-11 guarda também TPF, com o vencimento no code (ver abaixo) |
+| `anbima_titulos_publicos_historico` | code, date, **maturity**, field | mesmo título com preços diferentes por vencimento. Em transição: continua recebendo as cargas até os leitores migrarem para `renda_fixa_historico` |
 | `credito_privado_referencia` | code, date | vencimento da NTN-B de referência de debêntures e CRI/CRA |
 | `indicadores` | code, date, field | padrão |
 | demais | code, date, field | padrão de `get_data` |
@@ -22,7 +22,7 @@ campo, chave ou query de um lado, mude o outro. Fonte da tabela de destino:
 
 | Source (`get_data`) | Tabela | Workflow n8n (id) | Ativo |
 |---|---|---|---|
-| `anbima_feed_titulos_publicos_mercado_secundario` | `anbima_titulos_publicos_historico` | ANBIMA Feed → Postgres \| Mercado Secundário (`wJU1cF110bRfljGZ`) | sim |
+| `anbima_feed_titulos_publicos_mercado_secundario` | `anbima_titulos_publicos_historico` + `renda_fixa_historico` (gravação dupla) | ANBIMA Feed → Postgres \| Mercado Secundário (`wJU1cF110bRfljGZ`) | sim |
 | `anbima_feed_debentures_mais_mercado_secundario` | `renda_fixa_historico` + `credito_privado_referencia` | idem | sim |
 | `anbima_feed_cri_cra_mercado_secundario` | `renda_fixa_historico` + `credito_privado_referencia` | idem | sim |
 | `anbima_feed_indices_resultados_*` | `indicadores` | ANBIMA API → Postgres \| Índices (`plfmt05nXImIo4Rv`) | sim |
@@ -48,6 +48,33 @@ Providers sem réplica conhecida no n8n: `anbima_debentures`, `anbima_cri_cra`,
 `anbima_titulos_publicos`, `anbima_indices`, as demais categorias do
 `anbima_feed`, `debentures_com`, `simplify`, `invesco`, `kraneshares`,
 `b3_investor_flow`, `mais_retorno_fundos`.
+
+## TPF em `renda_fixa_historico` (desde 2026-11-11)
+
+- Formato do code: `<tipo_titulo>_<YYYY-MM-DD>`, ex. `NTN-B_2035-05-15`
+  (`persevera_tools/data/tpf_codes.py`). A chave de `renda_fixa_historico` não
+  tem vencimento; uma coluna `maturity` nullable não poderia entrar na PK e
+  quebraria os `ON CONFLICT` de todos os escritores.
+- Histórico copiado de `anbima_titulos_publicos_historico` em 2026-11-11
+  (893.113 linhas, 2017-06-01 → 2026-11-10; source NULL virou `anbima`).
+- Gravação dupla durante a transição: no n8n (`wJU1cF110bRfljGZ`) e em
+  `FinancialDataService.get_data` para `anbima_feed_titulos_publicos_mercado_secundario`
+  e `anbima_titulos_publicos`.
+- Índice parcial `renda_fixa_historico_tpf_field_date_idx` em `(field, date)`
+  com `WHERE code ~ '^(LTN|LFT|NTN-[A-Z])_\d{4}-\d{2}-\d{2}$'`. Consultas de TPF
+  por data devem repetir esse predicado para usá-lo (a PK começa por `code`).
+- A lista de códigos da Mais Retorno (provider e `KR9EDNi6nnWTtNfK`) exclui
+  `^(LTN|LFT|NTN|TESOURO)`.
+- Leitores:
+  - `get_series(category='titulos_publicos')` (`persevera_tools/fixed_income/data.py`)
+    lê `renda_fixa_historico` desde 2026-11-12 e devolve o mesmo formato de
+    antes (`date, code, maturity, value`, com `code` = tipo, ex. `NTN-B`).
+    Usado pelo spread IPCA (`calculate_spread`), inclusive no Dashboard.
+  - Pendente: PerseveraHub lê `anbima_titulos_publicos_historico` direto com
+    SQL próprio (`backend/apps/dados/renda_fixa.py`: `curva_ntnb`,
+    `taxas_titulos_publicos`).
+- Fase final, pendente (depois do Hub): renomear a tabela antiga, criar uma
+  view de compatibilidade e tirar a gravação dupla.
 
 ## Limites deste levantamento
 Feito pelos nomes e descrições dos workflows e, nos de renda fixa, pelo código

@@ -172,9 +172,13 @@ class MaisRetornoProvider(DataProvider):
         if codes_map is None:
             # Attempt to load from indicadores_definicoes where source='mais_retorno' and category matches
             try:
+                # renda_fixa_historico também guarda TPF (code NTN-B_2035-05-15)
+                # desde 2026-11-11; o filtro de prefixo os exclui de forma explícita.
+                # Mesma query do workflow n8n KR9EDNi6nnWTtNfK.
                 query = """SELECT DISTINCT code
                 FROM renda_fixa_historico
                 WHERE LENGTH(code) <= 6
+                  AND code !~* '^(LTN|LFT|NTN|TESOURO)'
                 ORDER BY code;"""
                 codes = read_sql(query)
                 # codes_map = get_emissions(selected_fields=['code'])
