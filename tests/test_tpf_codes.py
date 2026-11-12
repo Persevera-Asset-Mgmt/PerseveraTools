@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from persevera_tools.data.financial_data_service import FinancialDataService
+from persevera_tools.fixed_income import data as fi_data
 from persevera_tools.data.tpf_codes import (
     is_tpf_code,
     split_tpf_code,
@@ -110,3 +111,46 @@ def test_get_data_tpf_com_tabela_customizada_nao_duplica():
             table_name="tmp_tpf", primary_keys=["code", "date", "maturity", "field"],
         )
     assert [c.kwargs["table_name"] for c in to_sql.call_args_list] == ["tmp_tpf"]
+
+
+# --- get_series(category='titulos_publicos') lê renda_fixa_historico ---
+
+def _get_series_tpf(**kwargs):
+    retorno = pd.DataFrame({
+        "date": pd.to_datetime(["2026-11-11"]), "code": ["NTN-B"],
+        "maturity": pd.to_datetime(["2035-05-15"]), "value": [7.6756],
+    })
+    with patch.object(fi_data, "read_sql", return_value=retorno) as read_sql:
+        out = fi_data.get_series(category="titulos_publicos", **kwargs)
+    query = " ".join(read_sql.call_args.args[0].split())
+    return out, query, read_sql.call_args.kwargs
+
+
+def test_get_series_tpf_le_renda_fixa_com_predicado_do_indice():
+    out, query, kwargs = _get_series_tpf(code="NTN-B", start_date="2026-11-01", end_date="2026-11-11")
+    assert "FROM renda_fixa_historico" in query
+    assert "anbima_titulos_publicos_historico" not in query
+    # mesmo predicado do índice parcial renda_fixa_historico_tpf_field_date_idx
+    assert r"code ~ '^(LTN|LFT|NTN-[A-Z])_\d{4}-\d{2}-\d{2}$'" in query
+    assert "split_part(code, '_', 1) AS code" in query
+    assert "split_part(code, '_', 2)::date AS maturity" in query
+    assert "field IN ('yield_to_maturity')" in query
+    assert "split_part(code, '_', 1) IN ('NTN-B')" in query
+    assert "date >= '2026-11-01'" in query and "date <= '2026-11-11'" in query
+    assert query.endswith("ORDER BY date, code, maturity")
+    assert kwargs["date_columns"] == ["date", "maturity"]
+    # mesmo formato de antes: o DataFrame cru, sem pivot
+    assert list(out.columns) == ["date", "code", "maturity", "value"]
+
+
+def test_get_series_tpf_source():
+    _, query_all, _ = _get_series_tpf(code="NTN-B")
+    assert "source" not in query_all
+    _, query_anbima, _ = _get_series_tpf(code="NTN-B", source="anbima")
+    assert "AND source = 'anbima'" in query_anbima
+
+
+def test_get_series_tpf_sem_code_e_varios_fields():
+    _, query, _ = _get_series_tpf(field=["yield_to_maturity", "price_close"])
+    assert "field IN ('yield_to_maturity','price_close')" in query
+    assert "IN ('NTN" not in query

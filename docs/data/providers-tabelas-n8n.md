@@ -65,9 +65,16 @@ Providers sem réplica conhecida no n8n: `anbima_debentures`, `anbima_cri_cra`,
   por data devem repetir esse predicado para usá-lo (a PK começa por `code`).
 - A lista de códigos da Mais Retorno (provider e `KR9EDNi6nnWTtNfK`) exclui
   `^(LTN|LFT|NTN|TESOURO)`.
-- Fase final, pendente: migrar os leitores (`get_series(category='titulos_publicos')`
-  e outros), renomear a tabela antiga, criar uma view de compatibilidade e
-  tirar a gravação dupla.
+- Leitores:
+  - `get_series(category='titulos_publicos')` (`persevera_tools/fixed_income/data.py`)
+    lê `renda_fixa_historico` desde 2026-11-12 e devolve o mesmo formato de
+    antes (`date, code, maturity, value`, com `code` = tipo, ex. `NTN-B`).
+    Usado pelo spread IPCA (`calculate_spread`), inclusive no Dashboard.
+  - Pendente: PerseveraHub lê `anbima_titulos_publicos_historico` direto com
+    SQL próprio (`backend/apps/dados/renda_fixa.py`: `curva_ntnb`,
+    `taxas_titulos_publicos`).
+- Fase final, pendente (depois do Hub): renomear a tabela antiga, criar uma
+  view de compatibilidade e tirar a gravação dupla.
 
 ## Limites deste levantamento
 Feito pelos nomes e descrições dos workflows e, nos de renda fixa, pelo código

@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional, Union, List, Literal
 import pandas as pd
 
+from persevera_tools.data.tpf_codes import TPF_CODE_PATTERN, TPF_CODE_SEPARATOR
 from persevera_tools.db.operations import read_sql
 
 
@@ -177,6 +178,47 @@ def get_references(
     return read_sql(query, date_columns=['date', 'reference'])
 
 
+def _get_titulos_publicos(
+    codes: List[str],
+    fields: List[str],
+    source: str,
+    start_date_str: Optional[str],
+    end_date_str: Optional[str],
+) -> pd.DataFrame:
+    """Títulos públicos (``category='titulos_publicos'`` de ``get_series``).
+
+    Lê ``renda_fixa_historico``, onde o code de TPF leva o vencimento
+    (``NTN-B_2035-05-15``; ver ``persevera_tools/data/tpf_codes.py``), e devolve
+    o mesmo formato da antiga ``anbima_titulos_publicos_historico``:
+    ``date, code, maturity, value`` com ``code`` = tipo do título (``'NTN-B'``).
+    O predicado do code é o mesmo do índice parcial
+    ``renda_fixa_historico_tpf_field_date_idx``, que evita varrer a tabela.
+    """
+    sep = TPF_CODE_SEPARATOR
+    fields_str = "','".join(fields)
+    query = f"""
+        SELECT date,
+               split_part(code, '{sep}', 1) AS code,
+               split_part(code, '{sep}', 2)::date AS maturity,
+               value
+        FROM renda_fixa_historico
+        WHERE code ~ '{TPF_CODE_PATTERN}'
+          AND field IN ('{fields_str}')
+    """
+    if source != 'all':
+        query += f" AND source = '{source}'"
+    if codes:
+        codes_str = "','".join(codes)
+        query += f" AND split_part(code, '{sep}', 1) IN ('{codes_str}')"
+    if start_date_str:
+        query += f" AND date >= '{start_date_str}'"
+    if end_date_str:
+        query += f" AND date <= '{end_date_str}'"
+    query += " ORDER BY date, code, maturity"
+
+    return read_sql(query, date_columns=['date', 'maturity'])
+
+
 def get_series(
     code: Optional[Union[str, List[str]]] = None,
     start_date: Optional[Union[str, datetime, pd.Timestamp]] = None,
@@ -267,9 +309,7 @@ def get_series(
         cols = ['date', 'code', 'value']
         date_cols = ['date']
     elif category == 'titulos_publicos':
-        table_name = 'anbima_titulos_publicos_historico'
-        cols = ['date', 'code', 'maturity', 'value']
-        date_cols = ['date', 'maturity']
+        return _get_titulos_publicos(codes, fields, source, start_date_str, end_date_str)
     elif category is None:
         table_name = 'renda_fixa_historico'
         cols = ['date', 'code', 'field', 'value', 'source']
@@ -304,7 +344,7 @@ def get_series(
     query += " ORDER BY date, code, field"
 
     df = read_sql(query, date_columns=date_cols)
-    if category in ['credito_privado_ipca', 'titulos_publicos']:
+    if category == 'credito_privado_ipca':
         return df
 
     if df.empty:
