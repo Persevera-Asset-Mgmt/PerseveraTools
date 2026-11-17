@@ -106,7 +106,7 @@ Política de falha: explícita (`FiberyLoaderError`), sem fallback silencioso.
 ### 3.2 `build_spectrum(config)`
 
 1. **Covariância**: `Σ = D·ρ·D`, com `D = diag(vols)`.
-2. **HRP de 2 níveis (só diagnóstico)**: risk parity dentro de cada bucket, covariância macro derivada dos pesos intra-bucket, risk parity entre buckets (pesos macro entre 5% e 85%). Não participa da produção; a UI deixa isso explícito.
+2. **HRP de 2 níveis (só diagnóstico)**: risk parity dentro de cada bucket, covariância macro derivada dos pesos intra-bucket, risk parity entre buckets (pesos macro entre 5% e 85%). Não participa da produção; o Hub deixou de exibi-lo em 2026-11-17 (a aba "Diagnóstico HRP" saiu), mas `build_spectrum` ainda o calcula e devolve.
 3. **Curva de σ-alvo**: `σ(p) = σ_min · exp(k·(p−1))`, `k = ln(σ_max/σ_min)/(N−1)`. Crescimento exponencial entre perfis.
 4. **RC-target por bucket e perfil**: `f=(p−1)/(N−1)`, `g_b = f^γ_b`, `raw_b = (1−g_b)·RC_P1 + g_b·RC_P10`, renormalizado para somar 1. Os extremos são exatos; γ só afeta os intermediários. Com γ diferentes por bucket a soma bruta ≠ 1 e a renormalização muda o γ efetivo.
 5. **RC-target por classe**: RC do bucket dividido uniformemente entre as classes ou por `RC Intra-Bucket`.
@@ -159,8 +159,8 @@ Montada a cada requisição sobre o resultado em cache (barato). `classif` vem d
 - **visao**: KPIs, tabela de classes (vol, Max W, Max RC), tabela de RC targets (RC P1, RC P*N*, γ).
 - **espectro**: 4 colunas empilhadas 100% (pesos e RC, por classe e por bucket), σ alvo × realizado, tabela de pesos por perfil.
 - **detalhe** (perfil escolhido; padrão o do meio): KPIs, composição (peso, RC realizado, RC alvo, Δ RC), donuts (Classe, Layer 1, Conjunto), RC alvo × realizado por bucket e por classe.
-- **inputs**: vols, correlação completa (triângulo inferior), **correlação macro** (recalculada aqui com os pesos intra-bucket do HRP, mesma fórmula do motor) e blocos intra-bucket.
-- **hrp**: pesos HRP por classe e por bucket, vol HRP.
+- **inputs**: vols, correlação completa (triângulo inferior), **correlação macro** (recalculada aqui com os pesos intra-bucket do perfil escolhido; antes de 2026-11-17 eram os do HRP) e blocos intra-bucket.
+- ~~**hrp**: pesos HRP por classe e por bucket, vol HRP.~~ Removido do Hub em 2026-11-17 (PerseveraHub #48).
 - **avisos**: lista os perfis não convergidos.
 
 Cores: `BUCKET_COLORS` (de `acompanhamentos/configs/capital_market_assumptions`), com tons por classe dentro do bucket.
@@ -169,7 +169,7 @@ Cores: `BUCKET_COLORS` (de `acompanhamentos/configs/capital_market_assumptions`)
 
 - Filtros em query params (`useFiltrosUrl`), links compartilháveis. Livro/Status/Overrides só valem ao clicar **Calcular espectro**; o seletor de perfil muda na hora.
 - `useQuery` com `refetchInterval` de 3 s enquanto `status === 'rodando'`; mostra cronômetro e "leva cerca de 2 minutos".
-- 5 abas: Visão geral, Espectro de alocação, Detalhe do perfil, Inputs do modelo, Diagnóstico HRP. Botão "Baixar Excel" quando há resultado.
+- 4 abas: Visão geral, Espectro de alocação, Detalhe do perfil, Inputs do modelo (a aba Diagnóstico HRP saiu em 2026-11-17). Botão "Baixar Excel" quando há resultado.
 - Os campos de override só mandam valores quando `overrides=true`.
 
 ### 4.6 Versão do motor no Hub
