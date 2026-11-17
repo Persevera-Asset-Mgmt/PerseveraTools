@@ -200,7 +200,7 @@ o σ mínimo de 2% continua válido.
   `penalty` nos sorteios 3 e 4, como antes.
 - O colchão de caixa é uma camada à parte (não implementada): com fração `c` em
   T-bill, o risco da carteira é aproximadamente `(1 − c)·σ` do perfil, mantendo a
-  composição do perfil. Reduzir `c` de 35% no P7 (σ 7,3%) leva o risco a ~4,75%, o σ
+  composição do perfil. Exemplo: `c` = 35% sobre o P7 (σ 7,3%) leva o risco a ~4,75%, o σ
   do P5, mas com a composição do P7, não a do P5.
 
 ### Onshore × Offshore
