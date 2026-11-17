@@ -24,6 +24,24 @@ Onshore. Decisões do offshore em
 - **Correlações:** só Cross-Classe, com a matriz completa (78 pares, incluindo
   intra-bucket). Convenção: Classe A no bucket de menor índice (RF < Alt < RV).
 
+## Recalibração: checagem de robustez antes de aprovar
+Com vols um pouco diferentes o P10 pode cair em modo `penalty` (medido em
+[avaliacao-modelo.md](../../../docs/risk_budgeting_spectrum/avaliacao-modelo.md), seção 4).
+Antes de passar uma calibração a "Aprovada", rodar:
+
+    python scripts/rbs_robustez.py --livro <Onshore|Offshore> --status <status> --jobs 4
+
+Ele refaz o espectro com vols perturbadas (× exp(N(0; 0,15)), 6 sorteios) e lista os
+perfis instáveis (não convergem no caso base ou em algum sorteio); sai com código 1 se
+houver algum. Regra: **perfil instável → reduzir o σ máximo até convergir antes de
+aprovar** (`--sugerir-sigma-max` testa valores menores, em passos de 0,5 p.p.). Se nenhum
+valor resolver, revisar os tetos de peso ou as vols; não aprovar com perfil instável sem
+registrar a decisão. Subir o teto de peso das ações não é o caminho (concentra o P10).
+
+Decisão de 2026-11-17: o P10 fica como está na calibração vigente (σ máximo 11,5% no
+Onshore e 14% no Offshore); a regra acima vale a partir da próxima recalibração.
+O código está em `risk_budgeting_spectrum/robustness.py`.
+
 ## Estado da calibração
 Problemas conhecidos e números da calibração atual ficam em
 [docs/risk_budgeting_spectrum/calibracao.md](../../../docs/risk_budgeting_spectrum/calibracao.md).
