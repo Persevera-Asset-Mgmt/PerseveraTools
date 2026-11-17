@@ -83,3 +83,97 @@ def test_sugestao_para_antes_de_chegar_ao_sigma_min():
     best, tried = suggest_sigma_max(cfg, n_draws=0, step_pct=0.5, max_steps=4)
     assert [t[0] for t in tried] == [6.0] or best == 6.0
     assert all(sig > cfg.sigma_min_pct for sig, _ in tried)
+
+
+# ---------------------------------------------------------------------------
+# Sorteios válidos: teto viável abaixo do σ máximo = calibração inválida, ignorado
+
+from persevera_tools.quant_research.risk_budgeting_spectrum import robustness as rb  # noqa: E402
+
+
+def _run(draw, ok2=True, feasible=20.0):
+    """Resultado simulado: perfil 1 sempre ok; perfil 2 converge se `ok2`."""
+    w = {1: np.full(5, 0.2), 2: np.full(5, 0.2)}
+    return rb.RunResult(draw=draw, converged={1: True, 2: ok2},
+                        modes={1: "hard", 2: "hard" if ok2 else "penalty"},
+                        weights=w, feasible_max_pct=feasible)
+
+
+def test_sorteio_com_teto_abaixo_do_sigma_max_e_ignorado(monkeypatch):
+    # σ máx = 6: o sorteio 1 (teto 5,0) é inválido; o 2 (teto 8,0) vale e passa
+    monkeypatch.setattr(rb, "run_draws", lambda *a, **k: [
+        _run(0), _run(1, ok2=False, feasible=5.0), _run(2, ok2=True, feasible=8.0)])
+    rep = robustness_report(_config(), n_draws=2)
+    assert rep["sorteios_ignorados"] == [1]
+    assert rep["instaveis"] == []
+    assert list(rep["teto_viavel"]["ignorado"]) == [False, True, False]
+
+
+def test_sorteio_valido_que_falha_deixa_o_perfil_instavel(monkeypatch):
+    monkeypatch.setattr(rb, "run_draws", lambda *a, **k: [
+        _run(0), _run(1, ok2=True, feasible=8.0), _run(2, ok2=False, feasible=8.0)])
+    rep = robustness_report(_config(), n_draws=2)
+    assert rep["sorteios_ignorados"] == []
+    assert rep["instaveis"] == [2]
+    assert rep["perfis"].loc[2, "falhas"] == 1
+
+
+def test_incluir_inviaveis_restaura_o_criterio_antigo(monkeypatch):
+    monkeypatch.setattr(rb, "run_draws", lambda *a, **k: [
+        _run(0), _run(1, ok2=False, feasible=5.0), _run(2, ok2=True, feasible=8.0)])
+    rep = robustness_report(_config(), n_draws=2, exclude_infeasible=False)
+    assert rep["sorteios_ignorados"] == []
+    assert rep["instaveis"] == [2]
+
+
+def test_teto_igual_ao_sigma_max_nao_e_ignorado(monkeypatch):
+    monkeypatch.setattr(rb, "run_draws", lambda *a, **k: [
+        _run(0), _run(1, ok2=False, feasible=6.0)])
+    rep = robustness_report(_config(), n_draws=1)
+    assert rep["sorteios_ignorados"] == []  # cabe exatamente
+    assert rep["instaveis"] == [2]
+
+
+def test_base_que_nao_converge_continua_instavel_mesmo_sem_sorteios_validos(monkeypatch):
+    monkeypatch.setattr(rb, "run_draws", lambda *a, **k: [
+        _run(0, ok2=False), _run(1, ok2=True, feasible=2.0)])
+    rep = robustness_report(_config(), n_draws=1)
+    assert rep["sorteios_ignorados"] == [1]
+    assert rep["instaveis"] == [2]
+
+
+def test_sugestao_usa_conjunto_fixo_de_sorteios_ignorados(monkeypatch):
+    # Sorteio 1 (teto 5,0) sempre falha; o 2 (teto 8,0) só passa com σ máx ≤ 5,5.
+    # O 1 é ignorado em todos os candidatos, mesmo quando o candidato (5,0) o alcança.
+    def fake(config, *a, **k):
+        return [_run(0), _run(1, ok2=False, feasible=5.0),
+                _run(2, ok2=config.sigma_max_pct <= 5.5, feasible=8.0)]
+    monkeypatch.setattr(rb, "run_draws", fake)
+    best, tried = suggest_sigma_max(_config(), n_draws=2, step_pct=0.5, max_steps=4)
+    assert best == 5.5
+    assert tried == [(6.0, [2]), (5.5, [])]
+
+
+def test_sugestao_sem_criterio_de_ignorados_nao_resolve(monkeypatch):
+    def fake(config, *a, **k):
+        return [_run(0), _run(1, ok2=False, feasible=5.0),
+                _run(2, ok2=config.sigma_max_pct <= 5.5, feasible=8.0)]
+    monkeypatch.setattr(rb, "run_draws", fake)
+    best, tried = suggest_sigma_max(_config(), n_draws=2, step_pct=0.5, max_steps=3,
+                                    exclude_infeasible=False)
+    assert best is None
+    assert all(bad for _, bad in tried)
+
+
+def test_script_de_robustez_compila_e_aceita_os_argumentos():
+    """O script não é importado pelos outros testes; pega erro de sintaxe e de argumentos."""
+    import pathlib
+    import subprocess
+    import sys
+
+    script = pathlib.Path(__file__).parents[2] / "scripts" / "rbs_robustez.py"
+    compile(script.read_text(encoding="utf-8"), str(script), "exec")
+    out = subprocess.run([sys.executable, "-X", "utf8", str(script), "--help"],
+                         capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert out.returncode == 0, out.stderr
+    assert "--incluir-inviaveis" in out.stdout and "--sugerir-sigma-max" in out.stdout

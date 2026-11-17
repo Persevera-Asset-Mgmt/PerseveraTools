@@ -32,8 +32,10 @@ Antes de passar uma calibração a "Aprovada", rodar:
     python scripts/rbs_robustez.py --livro <Onshore|Offshore> --status <status> --jobs 4
 
 Ele refaz o espectro com vols perturbadas (× exp(N(0; 0,15)), 6 sorteios) e lista os
-perfis instáveis (não convergem no caso base ou em algum sorteio); sai com código 1 se
-houver algum. Regra: **perfil instável → reduzir o σ máximo até convergir antes de
+perfis instáveis (não convergem no caso base ou em algum sorteio válido); sai com código
+1 se houver algum. Sorteio válido: aquele em que o σ máximo da calibração ainda cabe no
+teto de vol viável do universo perturbado; se o teto cai abaixo dele, é calibração
+inválida nesse cenário e o sorteio é ignorado (`--incluir-inviaveis` o mantém). Regra: **perfil instável → reduzir o σ máximo até convergir antes de
 aprovar** (`--sugerir-sigma-max` testa valores menores, em passos de 0,5 p.p.). Se nenhum
 valor resolver, revisar os tetos de peso ou as vols; não aprovar com perfil instável sem
 registrar a decisão. Subir o teto de peso das ações não é o caminho (concentra o P10).

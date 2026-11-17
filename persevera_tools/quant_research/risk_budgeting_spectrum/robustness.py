@@ -9,7 +9,14 @@ reduzir o σ máximo até convergir antes de aprovar.
 
 Perturbação: cada vol é multiplicada por exp(N(0, sigma)), com semente fixa por sorteio;
 as correlações não mudam. Um perfil é *estável* se convergiu no caso base e em todos os
-sorteios.
+sorteios *válidos*.
+
+Sorteio válido: aquele em que o σ máximo da calibração ainda cabe no teto de vol viável do
+universo perturbado. Se o teto cai abaixo do σ máximo, a calibração seria recusada pelo
+loader nesse cenário (é calibração inválida, não fragilidade do modelo), então o sorteio é
+ignorado (`exclude_infeasible=False` o mantém). Em `suggest_sigma_max` o conjunto de
+sorteios ignorados é fixo, definido pelo σ máximo original: senão o sorteio voltaria a
+valer assim que o candidato caísse abaixo do teto dele.
 """
 
 from __future__ import annotations
@@ -89,20 +96,36 @@ def robustness_report(
     sigma: float = DEFAULT_SIGMA,
     seed: int = DEFAULT_SEED,
     n_jobs: int = 1,
+    exclude_infeasible: bool = True,
+    reference_sigma_max_pct: Optional[float] = None,
 ) -> dict:
     """
     Roda o caso base e os sorteios e resume por perfil.
 
+    `exclude_infeasible`: ignora os sorteios cujo teto viável fica abaixo de
+    `reference_sigma_max_pct` (default: o σ máximo da própria `config`).
+
     Retorna dict com:
-      perfis         → DataFrame (índice = perfil): base_ok, falhas (sorteios sem convergir),
-                       penalty (sorteios em modo penalty), estavel
+      perfis         → DataFrame (índice = perfil): base_ok, falhas (sorteios válidos sem
+                       convergir), penalty (sorteios válidos em modo penalty), estavel
       instaveis      → list[int] de perfis com estavel == False
-      teto_viavel    → DataFrame por sorteio: teto_viavel_pct, sigma_max_sobre_teto
+      teto_viavel    → DataFrame por caso: teto_viavel_pct, sigma_max_sobre_teto, ignorado
+      sorteios_ignorados → list[int] de sorteios fora do critério (teto < σ máximo)
       peso_std_pp    → DataFrame (classe × perfil): desvio-padrão do peso (p.p.) nos sorteios
+                       válidos
       n_draws, sigma → parâmetros usados
     """
     runs = run_draws(config, n_draws, sigma, seed, n_jobs)
-    base, draws = runs[0], runs[1:]
+    base, all_draws = runs[0], runs[1:]
+    ref = config.sigma_max_pct if reference_sigma_max_pct is None else reference_sigma_max_pct
+
+    def ignorado(r: RunResult) -> bool:
+        # mesma tolerância do check_sigma_range (1e-6 em fração = 1e-4 em %)
+        return (exclude_infeasible and r.feasible_max_pct is not None
+                and ref > r.feasible_max_pct + 1e-4)
+
+    ignorados = [r.draw for r in all_draws if ignorado(r)]
+    draws = [r for r in all_draws if r.draw not in ignorados]
     profiles = sorted(base.converged)
 
     rows = []
@@ -121,6 +144,7 @@ def robustness_report(
         "teto_viavel_pct": [r.feasible_max_pct for r in runs],
     }, index=[r.draw for r in runs])
     teto["sigma_max_sobre_teto"] = config.sigma_max_pct / teto["teto_viavel_pct"]
+    teto["ignorado"] = [r.draw in ignorados for r in runs]
 
     names = config.class_names
     if draws:
@@ -134,6 +158,7 @@ def robustness_report(
         "perfis": perfis,
         "instaveis": [int(p) for p in perfis.index[~perfis["estavel"]]],
         "teto_viavel": teto,
+        "sorteios_ignorados": ignorados,
         "peso_std_pp": peso_std,
         "n_draws": n_draws,
         "sigma": sigma,
@@ -148,6 +173,7 @@ def suggest_sigma_max(
     step_pct: float = 0.5,
     max_steps: int = 4,
     n_jobs: int = 1,
+    exclude_infeasible: bool = True,
 ) -> tuple[Optional[float], list[tuple[float, list[int]]]]:
     """
     Maior σ máximo (%) que deixa todos os perfis estáveis, testando `config.sigma_max_pct`
@@ -162,7 +188,9 @@ def suggest_sigma_max(
         if candidate <= config.sigma_min_pct:
             break
         rep = robustness_report(
-            replace(config, sigma_max_pct=candidate), n_draws, sigma, seed, n_jobs
+            replace(config, sigma_max_pct=candidate), n_draws, sigma, seed, n_jobs,
+            exclude_infeasible=exclude_infeasible,
+            reference_sigma_max_pct=config.sigma_max_pct,  # conjunto de ignorados fixo
         )
         tried.append((candidate, rep["instaveis"]))
         if not rep["instaveis"]:
