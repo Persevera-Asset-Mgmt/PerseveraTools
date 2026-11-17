@@ -387,3 +387,15 @@ inclui os anos iniciais do mercado, com vol semanal de 82%, contra 37% e 39% no 
 A mistura estabiliza o Offshore (σ máximo estável sobe de 10,5% para 11,0 a 11,5%) e reduz o
 HY no teto. No Onshore, as vols menores baixam o σ máximo estável em 0,5 a 1 p.p. A sugestão do
 script só testa a partir de 80% do teto e para baixo; o limite superior real não foi explorado.
+
+### 12.7 Calibrações gravadas no Fibery (2026-11-17)
+
+Decisão do responsável: a variante da seção 12.6 com o Bitcoin em EWMA puro. Criadas como
+*Rascunho* (cópia da calibração anterior de cada livro, com Default Vol e correlações novas):
+"Calibração Onshore - 2026-11-17" e "Calibração Offshore - 2026-11-17", cada uma com 13
+parâmetros, 3 RC targets e 78 correlações, σ 1,9%–11,0% (Onshore) e 2,0%–11,0% (Offshore),
+peso mínimo 0,5% e 2%. Vol das classes com proxy: 50% EWMA (λ = 0,995) + 50% semanal de
+15 anos, menos o Bitcoin (só EWMA); correlações semanais de 15 anos. Mantidos: Fundo Crédito
+GI e HY (sem proxy), tetos de peso, RC targets. As calibrações anteriores (2026-10-14 e
+2026-11-09) seguem como Rascunho. Como o Hub usa a calibração mais avançada e, no mesmo status,
+a mais recente, ele passa a usar as novas quando o cache de 1 h expirar.
