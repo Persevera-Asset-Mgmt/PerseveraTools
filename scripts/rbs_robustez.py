@@ -2,7 +2,8 @@
 
 Lê a calibração do Fibery (``load_from_fibery``; só leitura), refaz o espectro com vols
 perturbadas (cada vol × exp(N(0, sigma)), semente fixa) e lista os perfis instáveis: os que
-não convergem no caso base ou em algum sorteio. Código de saída 1 se houver perfil
+não convergem no caso base ou em algum sorteio válido (sorteio em que o teto de vol viável
+cai abaixo do σ máximo da calibração é ignorado; ``--incluir-inviaveis`` o mantém). Código de saída 1 se houver perfil
 instável, 0 se todos forem estáveis.
 
 Regra de recalibração (CLAUDE.md do módulo): perfil instável → reduzir o σ máximo até
@@ -42,6 +43,8 @@ def main() -> int:
                     help="desvio-padrão do log da vol (default 0,15)")
     ap.add_argument("--semente", type=int, default=DEFAULT_SEED)
     ap.add_argument("--jobs", type=int, default=1)
+    ap.add_argument("--incluir-inviaveis", action="store_true",
+                    help="não ignora sorteios cujo teto viável fica abaixo do σ máximo")
     ap.add_argument("--sugerir-sigma-max", action="store_true",
                     help="se houver perfil instável, testa σ máximos menores (passo de 0,5 p.p.)")
     args = ap.parse_args()
@@ -51,7 +54,12 @@ def main() -> int:
           f"–{config.sigma_max_pct:.2f}%  {len(config.assets)} classes  {config.n_profiles} perfis")
     print(f"{args.sorteios} sorteios, vol × exp(N(0, {args.sigma})), semente {args.semente}\n")
 
-    rep = robustness_report(config, args.sorteios, args.sigma, args.semente, args.jobs)
+    excluir = not args.incluir_inviaveis
+    rep = robustness_report(config, args.sorteios, args.sigma, args.semente, args.jobs,
+                            exclude_infeasible=excluir)
+    if rep["sorteios_ignorados"]:
+        print("Sorteios ignorados (teto viável < σ máximo da calibração):", rep["sorteios_ignorados"])
+        print()
     pd.set_option("display.width", 200)
     print(rep["perfis"].assign(perfil=lambda d: [f"P{p}" for p in d.index]).set_index("perfil").to_string())
     print("\nTeto de vol viável por caso (0 = base):")
@@ -64,7 +72,8 @@ def main() -> int:
         return 0
     print(f"\nPerfis instáveis: {['P%d' % p for p in rep['instaveis']]}")
     if args.sugerir_sigma_max:
-        best, tried = suggest_sigma_max(config, args.sorteios, args.sigma, args.semente, n_jobs=args.jobs)
+        best, tried = suggest_sigma_max(config, args.sorteios, args.sigma, args.semente,
+                                   n_jobs=args.jobs, exclude_infeasible=excluir)
         for sig, bad in tried:
             print(f"  σ máximo {sig:.2f}%: instáveis {['P%d' % p for p in bad] or 'nenhum'}")
         print(f"Sugestão: σ máximo {best:.2f}%" if best is not None
