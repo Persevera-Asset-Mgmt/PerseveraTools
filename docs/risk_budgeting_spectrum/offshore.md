@@ -44,10 +44,11 @@ IGIB (IEF), CTA/IALT (DBMF), GLDM (ouro) e FBTC (bitcoin):
    Max Weight de 40%). Medição: a classe tinha 12% no P1 e 0% de P2 a P10, então
    tirá-la só muda o P1 (ver [avaliacao-modelo.md](avaliacao-modelo.md), seção 9).
    O T-bill passa a servir só para balizar o risco total em momentos bullish ou
-   bearish (colchão de caixa sobre o perfil, fora do otimizador). **Pendente:**
-   remover do Fibery a classe "RF Pós-fixado" (e seus parâmetros e correlações) e
-   desenhar o colchão de caixa. Enquanto o Fibery não for alterado, as tabelas
-   abaixo e a calibração de 2026-11-09 ainda incluem a classe.
+   bearish (colchão de caixa sobre o perfil, fora do otimizador). A classe
+   "RF Pós-fixado" foi removida do Fibery em 2026-11-17 (classe, parâmetro e 13
+   correlações; o Offshore ficou com 13 classes e 78 pares). **Pendente:** desenhar o
+   colchão de caixa. As tabelas e o protótipo abaixo são de antes da remoção e ainda
+   mostram a classe.
 4. **Um representante por classe.** UCITS quando existir; senão o ETF US. Pares
    que eram escolha de duration ou estilo saem (SCHP, IGIB, FLOT, QQQ, MTUM,
    CTA, IALT).
