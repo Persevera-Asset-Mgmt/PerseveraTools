@@ -24,9 +24,14 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from ..metrics import calculate_ewma_volatility
+
 # Convenção da Cross-Classe: Classe A no bucket de menor índice.
 BUCKET_ORDER = ("Renda Fixa", "Alternativos", "Renda Variável")
 MIN_WEEKS = 52
+# Método da página "Capital Market Assumptions" do Hub (de onde vêm os inputs do Fibery):
+EWMA_DECAY = 0.995        # vol EWMA de retornos diários simples, anualizada por √252
+CMA_LOOKBACK_YEARS = 15   # janela da correlação de longo prazo (retornos semanais simples)
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,25 @@ def nearest_correlation(corr: np.ndarray, tol: float = 1e-10, max_iter: int = 50
             break
         y = y_new
     return (y + y.T) / 2
+
+
+def ewma_vols(prices: pd.DataFrame, decay: float = EWMA_DECAY) -> pd.Series:
+    """
+    Vol EWMA anualizada (fração) do último dia de cada coluna de `prices` (preços diários),
+    como a página CMA do Hub: ``calculate_ewma_volatility(decay=0.995)``.
+    """
+    return pd.Series({c: float(calculate_ewma_volatility(prices[c], decay=decay).iloc[-1])
+                      for c in prices.columns})
+
+
+def cma_correlation(prices: pd.DataFrame) -> pd.DataFrame:
+    """
+    Correlação de longo prazo como a página CMA: retornos semanais simples
+    (``resample("W").last().pct_change()``), correlação par a par; sem correção PSD.
+    """
+    px = prices.sort_index()
+    px.index = pd.to_datetime(px.index)
+    return px.resample("W").last().pct_change(fill_method=None).corr()
 
 
 def estimate_class_stats(

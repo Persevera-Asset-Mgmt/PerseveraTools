@@ -28,7 +28,7 @@ import pandas as pd
 
 from persevera_tools.quant_research.risk_budgeting_spectrum.loaders import load_from_fibery
 from persevera_tools.quant_research.risk_budgeting_spectrum.robustness import (
-    DEFAULT_DRAWS, DEFAULT_SEED, DEFAULT_SIGMA, robustness_report, suggest_sigma_max)
+    DEFAULT_CORR_SIGMA, DEFAULT_DRAWS, DEFAULT_SEED, DEFAULT_SIGMA, robustness_report, suggest_sigma_max)
 
 
 def main() -> int:
@@ -41,6 +41,8 @@ def main() -> int:
     ap.add_argument("--sorteios", type=int, default=DEFAULT_DRAWS)
     ap.add_argument("--sigma", type=float, default=DEFAULT_SIGMA,
                     help="desvio-padrão do log da vol (default 0,15)")
+    ap.add_argument("--sigma-corr", type=float, default=DEFAULT_CORR_SIGMA,
+                    help="desvio-padrão do z de Fisher de cada correlação (default 0,10; 0 = não perturba)")
     ap.add_argument("--semente", type=int, default=DEFAULT_SEED)
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--incluir-inviaveis", action="store_true",
@@ -52,11 +54,12 @@ def main() -> int:
     config = load_from_fibery(status=args.status, livro=args.livro)
     print(f"{config.calibration_name} [{config.calibration_status}]  σ {config.sigma_min_pct:.2f}%"
           f"–{config.sigma_max_pct:.2f}%  {len(config.assets)} classes  {config.n_profiles} perfis")
-    print(f"{args.sorteios} sorteios, vol × exp(N(0, {args.sigma})), semente {args.semente}\n")
+    print(f"{args.sorteios} sorteios, vol × exp(N(0, {args.sigma})), correlação z + N(0, {args.sigma_corr}), "
+          f"semente {args.semente}\n")
 
     excluir = not args.incluir_inviaveis
     rep = robustness_report(config, args.sorteios, args.sigma, args.semente, args.jobs,
-                            exclude_infeasible=excluir)
+                            exclude_infeasible=excluir, corr_sigma=args.sigma_corr)
     if rep["sorteios_ignorados"]:
         print("Sorteios ignorados (teto viável < σ máximo da calibração):", rep["sorteios_ignorados"])
         print()
@@ -73,7 +76,8 @@ def main() -> int:
     print(f"\nPerfis instáveis: {['P%d' % p for p in rep['instaveis']]}")
     if args.sugerir_sigma_max:
         best, tried = suggest_sigma_max(config, args.sorteios, args.sigma, args.semente,
-                                   n_jobs=args.jobs, exclude_infeasible=excluir)
+                                   n_jobs=args.jobs, exclude_infeasible=excluir,
+                                   corr_sigma=args.sigma_corr)
         for sig, bad in tried:
             print(f"  σ máximo {sig:.2f}%: instáveis {['P%d' % p for p in bad] or 'nenhum'}")
         print(f"Sugestão: σ máximo {best:.2f}%" if best is not None

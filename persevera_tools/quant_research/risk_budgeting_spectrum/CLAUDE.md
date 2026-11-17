@@ -41,8 +41,13 @@ aprovar** (`--sugerir-sigma-max` testa valores menores, em passos de 0,5 p.p.). 
 valor resolver, revisar os tetos de peso ou as vols; não aprovar com perfil instável sem
 registrar a decisão. Subir o teto de peso das ações não é o caminho (concentra o P10).
 
-Decisão de 2026-11-17: o P10 fica como está na calibração vigente (σ máximo 11,5% no
-Onshore e 14% no Offshore); a regra acima vale a partir da próxima recalibração.
+Decisão de 2026-11-17: a checagem perturba também as correlações (`--sigma-corr`, padrão 0,10,
+z de Fisher). Com ela, σ máximo 9,5% no Onshore e 13% no Offshore (aplicados no Fibery;
+avaliacao-modelo.md, seção 12).
+
+Inputs: Default Vol = EWMA diária com λ = 0,995 (√252) e correlação semanal de longo prazo
+(15 anos), como a página Capital Market Assumptions do Hub. `scripts/rbs_conferir_inputs.py`
+recalcula os dois a partir de `indicadores` e compara com a calibração (precisa de banco).
 O código está em `risk_budgeting_spectrum/robustness.py`.
 
 ## Estado da calibração

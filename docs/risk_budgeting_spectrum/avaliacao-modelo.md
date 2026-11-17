@@ -276,4 +276,126 @@ original. Mesma rodada, mesmos dados:
 | Sugestão do script | **10,5%** (antes 9,5%) | **13,0%** (inalterada) |
 
 O corte sugerido para o Onshore cai de 2,0 para 1,0 p.p. A decisão de aplicar os valores
-sugeridos no Fibery (`Sigma Max`) segue em aberto.
+sugeridos foi tomada e aplicada em 2026-11-17: `Sigma Max` do Onshore 11,5% → 10,5% e do
+Offshore 14% → 13%. A seção 12 revisa o Onshore.
+
+## 12. Correlações, piso de peso e tetos de peso (2026-11-17)
+
+Dados reais do Fibery lidos pelo conector, já com σ máximo de 10,5% (Onshore) e 13%
+(Offshore). Offshore com 13 classes, sem T-bill (a base no cabeçalho é anterior a isso).
+
+### 12.1 Robustez a perturbações de correlação
+
+A checagem passou a aceitar `--sigma-corr`: cada correlação vira
+tanh(arctanh ρ + N(0, s)), simétrica e reprojetada na correlação PSD mais próxima (Higham).
+Decisão do responsável (2026-11-17): `--sigma-corr 0,10` passa a ser o padrão da checagem; o
+Onshore foi para σ máximo 9,5% no Fibery (Offshore segue em 13%).
+Em 15 anos de dados semanais o erro estatístico de z é ~0,03; s = 0,10 é conservador e
+representa mudança de regime. Mesmos 6 sorteios de vol (semente 100), mais ruído de correlação:
+
+| | Onshore (σ máx 10,5%) | Offshore (σ máx 13%) |
+|---|---|---|
+| Só vol (seção 11.1) | estável | estável |
+| Vol + correlação s = 0,05 | P10 instável (1 de 6) → sugere **9,5%** | — |
+| Vol + correlação s = 0,10 | P10 instável (1 de 6) → sugere **9,5%** | **estável** |
+
+O Onshore a 10,5% é frágil: o sorteio 3 tem teto viável de 11,07% (σ máx = 95% do teto) e
+só passava sem ruído de correlação. O Offshore a 13% usa no máximo 85% do teto e aguenta.
+Classes mais sensíveis às correlações (desvio-padrão do peso, p.p.): Onshore, Inflação
+Longa 9,1, Crédito DI 8,5, Fundo Crédito GI 7,9; Offshore, Treasury Curta 10,1, Treasury
+Longa 8,1, MBS 6,3.
+
+### 12.2 Piso de peso mínimo (Onshore 0,5%, Offshore 2%)
+
+Todos os perfis convergem e a vol do P10 é atingida em qualquer piso testado (0, 0,5, 1 e
+2%). O piso só muda a composição: até 4,1 p.p. no Onshore (0,5% → 2%) e 5,0 p.p. no
+Offshore (2% → 0%); no Offshore o P1 zera 4 classes sem piso e 8 com 2%. Efeito cosmético,
+sem risco de convergência. Unificar os dois livros em 1% é opcional.
+
+### 12.3 Tetos de peso como alavanca do teto de vol viável
+
+Teto viável: Onshore 12,80% (σ máx = 82%), Offshore 17,35% (75%). Efeito de +5 p.p. no teto
+de peso de uma classe sobre o teto de vol: Onshore Ouro +0,46 p.p., RV Brasil +0,38, RV
+EUA +0,22, Bitcoin +0,17 (único no teto no P10, 8%); Offshore Bitcoin +0,70, Ações EM +0,13,
+Imobiliário +0,11, Ações DM ex-EUA +0,09; as demais, zero. Os ganhos são pequenos e
+concentrariam o P10; **σ máximo é a alavanca certa**, não os tetos.
+
+### 12.4 Ponto de atenção nos inputs
+
+Conferência contra `indicadores` (leitura, 2026-11-17; EWMA λ = 0,995 sobre a série própria de
+cada proxy; vol semanal simples = desvio-padrão dos retornos semanais da janela de 15 anos):
+
+| Classe (proxy) | Fibery | EWMA hoje | Semanal 15a |
+|---|---|---|---|
+| Bitcoin Onshore (`bitcoin_usd`) | 34,9 | **35,1** | 82,5 |
+| Bitcoin Offshore (`bitcoin_usd`) | 64,7 | 35,1 | 82,5 |
+| Ouro Onshore (`gold_100oz_futures`) | 23,9 | **24,6** | 16,1 |
+| Ouro Offshore (`gold`) | 17,3 | 24,7 | 15,6 |
+| RV EUA (`us_sp500`) | 14,8 | **15,0** | 15,7 |
+| RV Brasil (`br_ibovespa`) | 17,6 | 24,1 | 21,9 |
+| RF Inflação Longa (`anbima_ima_b5+`) | 7,1 | 13,6 | 10,9 |
+| RF Pré Longa (`anbima_irf_m1+`) | 5,1 | 9,5 | 5,5 |
+| Long & Short | 5,0 | 12,3 | 7,5 |
+
+Achados:
+- **O Bitcoin Onshore (34,9) está certo para o método da CMA**; é o Offshore (64,7) que não
+  segue o EWMA (parece o estimador semanal simples, de uma janela mais curta). Os dois livros
+  foram calibrados com métodos diferentes: Onshore, EWMA; Offshore, `estimation.py` antigo.
+- O ouro dos dois livros é praticamente a mesma série (EWMA 24,6 contra 24,7); em 2026-11-17
+  as duas classes passaram a usar `gold_100oz_futures` (decisão do responsável).
+- **O Onshore (calibração de 2026-10-14) é anterior ao choque de 2026-10-26**, quando no mesmo dia o
+  IMA-B 5+ caiu 9,8%, o Ibovespa 13,9%, o IRF-M1+ 6,4% e o IDA IPCA 5,7%. O EWMA de hoje já
+  carrega isso; as vols do Fibery em renda fixa e RV Brasil estão 40 a 90% abaixo.
+  A calibração precisa ser refeita (ver pipeline-atualizacao.md).
+
+### 12.5 Calibração recalculada em 2026-11-17 (candidata, não gravada)
+
+Inputs pelo método da página CMA (EWMA λ = 0,995; correlação semanal de 15 anos), 22 proxies
+lidos de `indicadores`. Mantidos como estão: as duas classes Onshore sem proxy (Fundo Crédito GI
+e HY), os tetos de peso, os RC targets e o σ mínimo.
+
+| | Onshore | Offshore |
+|---|---|---|
+| Vols trocadas / correlações trocadas | 11 de 13 / 55 de 78 | 13 de 13 / 78 de 78 |
+| Maior mudança de vol | L&S +147%, Inflação Longa +91%, Pré Longa +85% | HY −61%, Bitcoin −46%, Imobiliário −43%, Ouro +42% |
+| Teto de vol viável | 15,1% (antes 12,8%) | 14,6% (antes 17,3%) |
+| σ máximo testado e resultado | 12,0%: todos estáveis | 11,5%: P8, P9 e P10 instáveis; 11,0%: idem; **10,5%: estáveis** |
+| σ máximo sugerido | **12,0%** (hoje 9,5%) | **10,5%** (hoje 13,0%) |
+
+Observações:
+- Offshore: com a vol de HY em 3,0% (contra 6,4% semanal de 15 anos e 7,6% na calibração atual),
+  o HY bate no teto de peso de 15% em 5 dos 10 perfis. Sinal de que o EWMA subestima o risco de
+  crédito em regime calmo.
+- O σ máximo sugerido para o Onshore sobe porque as vols subiram; para o Offshore cai porque
+  o teto viável caiu e o P8 a P10 passam a depender do HY e do crédito IG no teto.
+
+### 12.6 Variante: vol = 50% EWMA + 50% semanal de 15 anos
+
+Mesmos inputs de 12.5, só a Default Vol muda (correlações iguais). Duas versões: misturando todas as
+classes, e misturando todas menos o Bitcoin, que fica só em EWMA (a janela de 15 anos do Bitcoin
+inclui os anos iniciais do mercado, com vol semanal de 82%, contra 37% e 39% no último e nos
+últimos três anos). Mesmo critério (6 sorteios, vol 0,15, correlação 0,10), partindo de 80% do teto.
+
+| | EWMA puro | Mistura (todas) | Mistura (Bitcoin em EWMA) |
+|---|---|---|---|
+| Onshore: teto viável / σ máx estável | 15,1% / 12,0% | 14,5% / 11,5% | 14,0% / 11,0% |
+| Offshore: teto viável / σ máx estável | 14,6% / 10,5% | 14,6% / **11,5%** | 14,6% / 11,0% |
+| Offshore: vol do HY | 3,0% | 4,7% | 4,7% |
+| Offshore: perfis com HY no teto de 15% | 5 de 10 | 1 (P9) | 3 (P8 a P10) |
+| Offshore: Bitcoin | 35,1% | 58,8% | 35,1% |
+
+A mistura estabiliza o Offshore (σ máximo estável sobe de 10,5% para 11,0 a 11,5%) e reduz o
+HY no teto. No Onshore, as vols menores baixam o σ máximo estável em 0,5 a 1 p.p. A sugestão do
+script só testa a partir de 80% do teto e para baixo; o limite superior real não foi explorado.
+
+### 12.7 Calibrações gravadas no Fibery (2026-11-17)
+
+Decisão do responsável: a variante da seção 12.6 com o Bitcoin em EWMA puro. Criadas como
+*Rascunho* (cópia da calibração anterior de cada livro, com Default Vol e correlações novas):
+"Calibração Onshore - 2026-11-17" e "Calibração Offshore - 2026-11-17", cada uma com 13
+parâmetros, 3 RC targets e 78 correlações, σ 1,9%–11,0% (Onshore) e 2,0%–11,0% (Offshore),
+peso mínimo 0,5% e 2%. Vol das classes com proxy: 50% EWMA (λ = 0,995) + 50% semanal de
+15 anos, menos o Bitcoin (só EWMA); correlações semanais de 15 anos. Mantidos: Fundo Crédito
+GI e HY (sem proxy), tetos de peso, RC targets. As calibrações anteriores (2026-10-14 e
+2026-11-09) seguem como Rascunho. Como o Hub usa a calibração mais avançada e, no mesmo status,
+a mais recente, ele passa a usar as novas quando o cache de 1 h expirar.

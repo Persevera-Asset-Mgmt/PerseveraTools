@@ -37,5 +37,6 @@ mostraram e o que ainda está em aberto.
 | [data/providers-tabelas-n8n.md](data/providers-tabelas-n8n.md) | Aprendizado | Tabela de destino de cada provider, chaves do upsert e workflows do n8n que replicam a carga |
 | [risk_budgeting_spectrum/arquitetura.md](risk_budgeting_spectrum/arquitetura.md) | Aprendizado | RBS ponta a ponta: modelo no Fibery, motor, página Alocação · RBS do Hub, riscos e divergências entre docs |
 | [risk_budgeting_spectrum/avaliacao-modelo.md](risk_budgeting_spectrum/avaliacao-modelo.md) | Aprendizado | Medição do RBS (Onshore e Offshore) com a calibração real: pesos por perfil, sensibilidade, isolamento do P10, concentração e retorno implícito |
+| [risk_budgeting_spectrum/pipeline-atualizacao.md](risk_budgeting_spectrum/pipeline-atualizacao.md) | Proposta | Pipeline de atualização da calibração do RBS (vols EWMA, correlação de longo prazo, robustez, aprovação) |
 | [risk_budgeting_spectrum/calibracao.md](risk_budgeting_spectrum/calibracao.md) | Aprendizado | Calibração do Motor RBS no Fibery e problemas conhecidos |
 | [risk_budgeting_spectrum/offshore.md](risk_budgeting_spectrum/offshore.md) | Proposta (loader por livro neste PR) | RBS offshore em USD: decisões de desenho, classes, protótipo e campo Livro no Fibery |
