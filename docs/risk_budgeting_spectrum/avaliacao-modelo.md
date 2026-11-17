@@ -430,7 +430,7 @@ Observações:
   "conservador" diante de um choque de juros domésticos: seu risco é todo de renda fixa.
 - Offshore 2022: todos os perfis perdem; o P1 perdeu 6,6% (3,7σ), porque o risco está em duration
   e crédito.
-- Choque de vols × 1,5 com correlações → ρ + 0,5(1 − ρ): o σ dobre em todos os perfis (razão de
+- Choque de vols × 1,5 com correlações → ρ + 0,5(1 − ρ): o σ dobra em todos os perfis (razão de
   1,8 a 2,1); a diversificação do modelo depende de correlações baixas.
 
 ### 13.1 Parecer sobre os parâmetros do Fibery além de vols e correlações
