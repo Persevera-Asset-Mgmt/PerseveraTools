@@ -177,3 +177,38 @@ def test_script_de_robustez_compila_e_aceita_os_argumentos():
                          capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert out.returncode == 0, out.stderr
     assert "--incluir-inviaveis" in out.stdout and "--sugerir-sigma-max" in out.stdout
+
+
+def test_perturb_corr_e_psd_simetrica_e_reprodutivel():
+    from persevera_tools.quant_research.risk_budgeting_spectrum.robustness import perturb_corr
+    cfg = _config()
+    a, b = perturb_corr(cfg, 0.2, seed=1), perturb_corr(cfg, 0.2, seed=1)
+    c = perturb_corr(cfg, 0.2, seed=2)
+    assert (a.full_corr == b.full_corr).all()
+    assert not np.allclose(a.full_corr, c.full_corr)
+    assert np.allclose(a.full_corr, a.full_corr.T)
+    assert np.allclose(np.diag(a.full_corr), 1.0)
+    assert np.linalg.eigvalsh(a.full_corr).min() >= -1e-8
+    assert not np.allclose(a.full_corr, cfg.full_corr)
+    assert (cfg.full_corr[np.triu_indices(5, 1)] == 0.2).all()  # original intacto
+
+
+def test_perturb_corr_sigma_zero_devolve_a_propria_config():
+    from persevera_tools.quant_research.risk_budgeting_spectrum.robustness import perturb_corr
+    cfg = _config()
+    assert perturb_corr(cfg, 0.0, seed=3) is cfg
+
+
+def test_sorteios_de_vol_nao_mudam_com_corr_sigma():
+    from persevera_tools.quant_research.risk_budgeting_spectrum.robustness import run_draws
+    cfg = _config()
+    a = run_draws(cfg, 1, 0.1, 5, corr_sigma=0.0)[1]
+    b = run_draws(cfg, 1, 0.1, 5, corr_sigma=0.2)[1]
+    assert a.draw == b.draw == 1
+    assert not np.allclose(a.weights[1], b.weights[1])  # a correlação mudou o resultado
+
+
+def test_relatorio_registra_corr_sigma():
+    rep = robustness_report(_config(), n_draws=1, sigma=0.05, corr_sigma=0.1)
+    assert rep["corr_sigma"] == 0.1
+    assert rep["instaveis"] == []

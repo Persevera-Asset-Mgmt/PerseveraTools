@@ -276,4 +276,51 @@ original. Mesma rodada, mesmos dados:
 | Sugestão do script | **10,5%** (antes 9,5%) | **13,0%** (inalterada) |
 
 O corte sugerido para o Onshore cai de 2,0 para 1,0 p.p. A decisão de aplicar os valores
-sugeridos no Fibery (`Sigma Max`) segue em aberto.
+sugeridos foi tomada e aplicada em 2026-11-17: `Sigma Max` do Onshore 11,5% → 10,5% e do
+Offshore 14% → 13%. A seção 12 revisa o Onshore.
+
+## 12. Correlações, piso de peso e tetos de peso (2026-11-17)
+
+Dados reais do Fibery lidos pelo conector, já com σ máximo de 10,5% (Onshore) e 13%
+(Offshore). Offshore com 13 classes, sem T-bill (a base no cabeçalho é anterior a isso).
+
+### 12.1 Robustez a perturbações de correlação
+
+A checagem passou a aceitar `--sigma-corr`: cada correlação vira
+tanh(arctanh ρ + N(0, s)), simétrica e reprojetada na correlação PSD mais próxima (Higham).
+Default 0 (não perturba), então a regra de recalibração segue como estava até decisão.
+Em 15 anos de dados semanais o erro estatístico de z é ~0,03; s = 0,10 é conservador e
+representa mudança de regime. Mesmos 6 sorteios de vol (semente 100), mais ruído de correlação:
+
+| | Onshore (σ máx 10,5%) | Offshore (σ máx 13%) |
+|---|---|---|
+| Só vol (seção 11.1) | estável | estável |
+| Vol + correlação s = 0,05 | P10 instável (1 de 6) → sugere **9,5%** | — |
+| Vol + correlação s = 0,10 | P10 instável (1 de 6) → sugere **9,5%** | **estável** |
+
+O Onshore a 10,5% é frágil: o sorteio 3 tem teto viável de 11,07% (σ máx = 95% do teto) e
+só passava sem ruído de correlação. O Offshore a 13% usa no máximo 85% do teto e aguenta.
+Classes mais sensíveis às correlações (desvio-padrão do peso, p.p.): Onshore, Inflação
+Longa 9,1, Crédito DI 8,5, Fundo Crédito GI 7,9; Offshore, Treasury Curta 10,1, Treasury
+Longa 8,1, MBS 6,3.
+
+### 12.2 Piso de peso mínimo (Onshore 0,5%, Offshore 2%)
+
+Todos os perfis convergem e a vol do P10 é atingida em qualquer piso testado (0, 0,5, 1 e
+2%). O piso só muda a composição: até 4,1 p.p. no Onshore (0,5% → 2%) e 5,0 p.p. no
+Offshore (2% → 0%); no Offshore o P1 zera 4 classes sem piso e 8 com 2%. Efeito cosmético,
+sem risco de convergência. Unificar os dois livros em 1% é opcional.
+
+### 12.3 Tetos de peso como alavanca do teto de vol viável
+
+Teto viável: Onshore 12,80% (σ máx = 82%), Offshore 17,35% (75%). Efeito de +5 p.p. no teto
+de peso de uma classe sobre o teto de vol: Onshore Ouro +0,46 p.p., RV Brasil +0,38, RV
+EUA +0,22, Bitcoin +0,17 (único no teto no P10, 8%); Offshore Bitcoin +0,70, Ações EM +0,13,
+Imobiliário +0,11, Ações DM ex-EUA +0,09; as demais, zero. Os ganhos são pequenos e
+concentrariam o P10; **σ máximo é a alavanca certa**, não os tetos.
+
+### 12.4 Ponto de atenção nos inputs
+
+Vol do Bitcoin: **34,9% no Onshore e 64,7% no Offshore**. Dependendo do proxy pode haver
+explicação (moeda, ETF, janela do EWMA); se não houver, é erro de input, e o Onshore estaria
+subestimando o risco da classe (cap de 8% no teto no P10). A verificar na recalibração.

@@ -31,8 +31,10 @@ import pandas as pd
 
 from .config import SpectrumConfig
 from .core import build_spectrum, compute_feasible_vol_range
+from .estimation import nearest_correlation
 
 DEFAULT_SIGMA = 0.15      # desvio-padrão do log da vol (15%)
+DEFAULT_CORR_SIGMA = 0.0  # desvio-padrão do z de Fisher de cada correlação (0 = não perturba)
 DEFAULT_DRAWS = 6
 DEFAULT_SEED = 100
 
@@ -53,6 +55,24 @@ def perturb_vols(config: SpectrumConfig, sigma: float = DEFAULT_SIGMA, seed: int
     mult = np.exp(rng.normal(0.0, sigma, len(config.assets)))
     assets = [replace(a, default_vol=a.default_vol * float(m)) for a, m in zip(config.assets, mult)]
     return replace(config, assets=assets)
+
+
+def perturb_corr(config: SpectrumConfig, sigma: float, seed: int = 0) -> SpectrumConfig:
+    """
+    Nova config com cada correlação ρ → tanh(arctanh(ρ) + N(0, sigma)), simétrica e
+    reprojetada na correlação PSD mais próxima; não modifica `config`.
+    """
+    if sigma <= 0:
+        return config
+    rng = np.random.default_rng(seed)
+    n = config.full_corr.shape[0]
+    iu = np.triu_indices(n, k=1)
+    z = np.arctanh(np.clip(config.full_corr[iu], -0.999999, 0.999999))
+    noisy = np.tanh(z + rng.normal(0.0, sigma, len(z)))
+    corr = np.eye(n)
+    corr[iu] = noisy
+    corr = corr + corr.T - np.eye(n)
+    return replace(config, full_corr=nearest_correlation(corr))
 
 
 def _run(args: tuple[int, SpectrumConfig]) -> RunResult:
@@ -79,10 +99,15 @@ def run_draws(
     sigma: float = DEFAULT_SIGMA,
     seed: int = DEFAULT_SEED,
     n_jobs: int = 1,
+    corr_sigma: float = DEFAULT_CORR_SIGMA,
 ) -> list[RunResult]:
-    """Caso base (draw 0) e `n_draws` sorteios (draws 1..n, semente `seed + draw`)."""
+    """
+    Caso base (draw 0) e `n_draws` sorteios (draws 1..n, semente `seed + draw`; as
+    correlações usam uma semente à parte, então os sorteios de vol não mudam com `corr_sigma`).
+    """
     jobs = [(0, config)] + [
-        (i, perturb_vols(config, sigma, seed + i)) for i in range(1, n_draws + 1)
+        (i, perturb_corr(perturb_vols(config, sigma, seed + i), corr_sigma, seed + 10_000 + i))
+        for i in range(1, n_draws + 1)
     ]
     if n_jobs > 1:
         with ProcessPoolExecutor(max_workers=n_jobs) as ex:
@@ -98,6 +123,7 @@ def robustness_report(
     n_jobs: int = 1,
     exclude_infeasible: bool = True,
     reference_sigma_max_pct: Optional[float] = None,
+    corr_sigma: float = DEFAULT_CORR_SIGMA,
 ) -> dict:
     """
     Roda o caso base e os sorteios e resume por perfil.
@@ -115,7 +141,7 @@ def robustness_report(
                        válidos
       n_draws, sigma → parâmetros usados
     """
-    runs = run_draws(config, n_draws, sigma, seed, n_jobs)
+    runs = run_draws(config, n_draws, sigma, seed, n_jobs, corr_sigma)
     base, all_draws = runs[0], runs[1:]
     ref = config.sigma_max_pct if reference_sigma_max_pct is None else reference_sigma_max_pct
 
@@ -162,6 +188,7 @@ def robustness_report(
         "peso_std_pp": peso_std,
         "n_draws": n_draws,
         "sigma": sigma,
+        "corr_sigma": corr_sigma,
     }
 
 
@@ -174,6 +201,7 @@ def suggest_sigma_max(
     max_steps: int = 4,
     n_jobs: int = 1,
     exclude_infeasible: bool = True,
+    corr_sigma: float = DEFAULT_CORR_SIGMA,
 ) -> tuple[Optional[float], list[tuple[float, list[int]]]]:
     """
     Maior σ máximo (%) que deixa todos os perfis estáveis, testando `config.sigma_max_pct`
@@ -191,6 +219,7 @@ def suggest_sigma_max(
             replace(config, sigma_max_pct=candidate), n_draws, sigma, seed, n_jobs,
             exclude_infeasible=exclude_infeasible,
             reference_sigma_max_pct=config.sigma_max_pct,  # conjunto de ignorados fixo
+            corr_sigma=corr_sigma,
         )
         tried.append((candidate, rep["instaveis"]))
         if not rep["instaveis"]:

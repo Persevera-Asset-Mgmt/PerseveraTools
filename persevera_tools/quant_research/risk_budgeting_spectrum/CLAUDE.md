@@ -41,8 +41,10 @@ aprovar** (`--sugerir-sigma-max` testa valores menores, em passos de 0,5 p.p.). 
 valor resolver, revisar os tetos de peso ou as vols; não aprovar com perfil instável sem
 registrar a decisão. Subir o teto de peso das ações não é o caminho (concentra o P10).
 
-Decisão de 2026-11-17: o P10 fica como está na calibração vigente (σ máximo 11,5% no
-Onshore e 14% no Offshore); a regra acima vale a partir da próxima recalibração.
+Decisão de 2026-11-17: σ máximo ajustado para 10,5% (Onshore) e 13% (Offshore) pelo critério
+acima, só com perturbação de vol. `--sigma-corr 0,10` também perturba as correlações (z de
+Fisher): o Offshore segue estável, o Onshore pede 9,5% (avaliacao-modelo.md, seção 12). Se
+esse passa a ser o critério padrão é decisão em aberto.
 O código está em `risk_budgeting_spectrum/robustness.py`.
 
 ## Estado da calibração
