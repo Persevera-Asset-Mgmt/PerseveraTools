@@ -368,3 +368,22 @@ Observações:
   crédito em regime calmo.
 - O σ máximo sugerido para o Onshore sobe porque as vols subiram; para o Offshore cai porque
   o teto viável caiu e o P8 a P10 passam a depender do HY e do crédito IG no teto.
+
+### 12.6 Variante: vol = 50% EWMA + 50% semanal de 15 anos
+
+Mesmos inputs de 12.5, só a Default Vol muda (correlações iguais). Duas versões: misturando todas as
+classes, e misturando todas menos o Bitcoin, que fica só em EWMA (a janela de 15 anos do Bitcoin
+inclui os anos iniciais do mercado, com vol semanal de 82%, contra 37% e 39% no último e nos
+últimos três anos). Mesmo critério (6 sorteios, vol 0,15, correlação 0,10), partindo de 80% do teto.
+
+| | EWMA puro | Mistura (todas) | Mistura (Bitcoin em EWMA) |
+|---|---|---|---|
+| Onshore: teto viável / σ máx estável | 15,1% / 12,0% | 14,5% / 11,5% | 14,0% / 11,0% |
+| Offshore: teto viável / σ máx estável | 14,6% / 10,5% | 14,6% / **11,5%** | 14,6% / 11,0% |
+| Offshore: vol do HY | 3,0% | 4,7% | 4,7% |
+| Offshore: perfis com HY no teto de 15% | 5 de 10 | 1 (P9) | 3 (P8 a P10) |
+| Offshore: Bitcoin | 35,1% | 58,8% | 35,1% |
+
+A mistura estabiliza o Offshore (σ máximo estável sobe de 10,5% para 11,0 a 11,5%) e reduz o
+HY no teto. No Onshore, as vols menores baixam o σ máximo estável em 0,5 a 1 p.p. A sugestão do
+script só testa a partir de 80% do teto e para baixo; o limite superior real não foi explorado.
