@@ -58,3 +58,25 @@
 4. **Quem aprova** e onde fica o registro da decisão (campo de descrição da calibração).
 5. **Inconsistência de input**: vol do Bitcoin 34,9% no Onshore contra 64,7% no Offshore
    (ver avaliacao-modelo.md, seção 12.4).
+
+## Avaliação de robustez do pipeline (2026-11-17)
+
+Não é robusto ainda. Lacunas medidas ou observadas:
+1. **Sensibilidade ao instante da foto.** Um choque (2026-10-26) moveu as vols Onshore de renda
+   fixa em 50 a 90% em três semanas, mesmo com λ = 0,995. Sem trava (mistura com a vol de longo
+   prazo, limite de variação por recalibração, limite de giro), cada recalibração repassa o
+   último choque (ou a última calmaria, caso do HY Offshore a 3,0%) para a carteira.
+2. **Método único.** Os dois livros usavam métodos diferentes (Bitcoin 34,9% e 64,7% com o
+   mesmo proxy). O estimador tem de ser um só, no código, e não só na página do Hub.
+3. **Dados sem checagem.** Não há teste de defasagem (IHFA com último dado em 10/11, IDA em 13/11)
+   nem de outlier (Ibovespa −13,9% em 26/10 é consistente entre ativos, mas não foi
+   confrontado com uma segunda fonte).
+4. **Classes sem proxy** (Fundo Crédito GI e HY, Onshore) ficam com vol e correlação manuais, de
+   outra época e outro método, misturadas na mesma matriz.
+5. **Réplica em SQL não é idêntica à página do Hub** (calendário próprio de cada série contra o
+   calendário unido da página; alinhamento semanal). Bateu em 3 classes com diferença de até
+   0,7 p.p., mas sem teste de equivalência.
+6. **Checagem de robustez com 6 sorteios** é ruidosa: o σ máximo do Onshore mudou 1 p.p. por
+   causa de um único sorteio. Falta mais sorteios (30 ou mais) e relatar a taxa de falha.
+   A perturbação é simétrica; não cobre viés de regime (correlações sobem em crise).
+7. **Testes só sintéticos**, sem regressão sobre calibração real; gravação no Fibery manual.

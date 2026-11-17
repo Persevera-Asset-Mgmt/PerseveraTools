@@ -347,3 +347,24 @@ Achados:
   IMA-B 5+ caiu 9,8%, o Ibovespa 13,9%, o IRF-M1+ 6,4% e o IDA IPCA 5,7%. O EWMA de hoje já
   carrega isso; as vols do Fibery em renda fixa e RV Brasil estão 40 a 90% abaixo.
   A calibração precisa ser refeita (ver pipeline-atualizacao.md).
+
+### 12.5 Calibração recalculada em 2026-11-17 (candidata, não gravada)
+
+Inputs pelo método da página CMA (EWMA λ = 0,995; correlação semanal de 15 anos), 22 proxies
+lidos de `indicadores`. Mantidos como estão: as duas classes Onshore sem proxy (Fundo Crédito GI
+e HY), os tetos de peso, os RC targets e o σ mínimo.
+
+| | Onshore | Offshore |
+|---|---|---|
+| Vols trocadas / correlações trocadas | 11 de 13 / 55 de 78 | 13 de 13 / 78 de 78 |
+| Maior mudança de vol | L&S +147%, Inflação Longa +91%, Pré Longa +85% | HY −61%, Bitcoin −46%, Imobiliário −43%, Ouro +42% |
+| Teto de vol viável | 15,1% (antes 12,8%) | 14,6% (antes 17,3%) |
+| σ máximo testado e resultado | 12,0%: todos estáveis | 11,5%: P8, P9 e P10 instáveis; 11,0%: idem; **10,5%: estáveis** |
+| σ máximo sugerido | **12,0%** (hoje 9,5%) | **10,5%** (hoje 13,0%) |
+
+Observações:
+- Offshore: com a vol de HY em 3,0% (contra 6,4% semanal de 15 anos e 7,6% na calibração atual),
+  o HY bate no teto de peso de 15% em 5 dos 10 perfis. Sinal de que o EWMA subestima o risco de
+  crédito em regime calmo.
+- O σ máximo sugerido para o Onshore sobe porque as vols subiram; para o Offshore cai porque
+  o teto viável caiu e o P8 a P10 passam a depender do HY e do crédito IG no teto.
