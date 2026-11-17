@@ -260,3 +260,20 @@ Observações:
 - Classes mais sensíveis (desvio-padrão do peso entre sorteios, p.p.): Onshore, Inflação
   Longa 9,6, Fundo Crédito HY 8,7, Inflação Curta 8,2; Offshore, Ações EUA 12,4,
   Treasury Longa 9,9, Ações DM ex-EUA 9,0.
+
+### 11.1 Com o critério de sorteios válidos (PerseveraTools #46)
+
+Decisão do responsável: ignorar os sorteios em que o teto de vol viável do universo
+perturbado fica abaixo do σ máximo da calibração (é calibração inválida nesse cenário,
+não fragilidade do modelo). O conjunto de ignorados é fixo, definido pelo σ máximo
+original. Mesma rodada, mesmos dados:
+
+| | Onshore | Offshore |
+|---|---|---|
+| Sorteios ignorados | 3 (teto 11,06% < 11,5%) | nenhum (todos os tetos > 14%) |
+| Perfis instáveis | **P10** (3 falhas em 5 válidos); P9 passa a estável | **P10** (2 de 6), inalterado |
+| σ máximo testado → instáveis | 11,5: P10 · 11,0: P10 · 10,5: nenhum | 14,0: P10 · 13,5: P10 · 13,0: nenhum |
+| Sugestão do script | **10,5%** (antes 9,5%) | **13,0%** (inalterada) |
+
+O corte sugerido para o Onshore cai de 2,0 para 1,0 p.p. A decisão de aplicar os valores
+sugeridos no Fibery (`Sigma Max`) segue em aberto.
