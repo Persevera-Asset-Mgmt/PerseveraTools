@@ -1,5 +1,5 @@
 """
-Motor de Espectro de Alocação Onshore — Persevera Asset Management.
+Motor de Espectro de Alocação (Onshore e Offshore) — Persevera Asset Management.
 
 Estrutura:
   • core    — motor matemático puro (sem dependência de I/O)
@@ -7,8 +7,8 @@ Estrutura:
   • loaders — fontes de configuração (Fibery, defaults, YAML futuro)
 
 Uso típico:
-    from persevera_tools.quant_research.hrp import build_spectrum
-    from persevera_tools.quant_research.hrp.loaders import load_from_fibery
+    from persevera_tools.quant_research.risk_budgeting_spectrum import build_spectrum
+    from persevera_tools.quant_research.risk_budgeting_spectrum.loaders import load_from_fibery
 
     config = load_from_fibery()  # Calibração mais recente em status Aprovada
     result = build_spectrum(config)
