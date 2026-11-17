@@ -39,9 +39,16 @@ IGIB (IEF), CTA/IALT (DBMF), GLDM (ouro) e FBTC (bitcoin):
    cortaria o Growth atual. Medir em BRL não serve: o câmbio põe até a carteira
    de T-bills em ~15% de vol, e quanto mandar para fora é decisão de alocação
    do cliente, fora do modelo (como o caixa no onshore).
-3. **T-bills dentro do otimizador, como Pós-fixado.** Diferente do onshore,
-   onde o caixa fica fora. Com vol de ~0,4%, a classe precisa de Max Weight
-   (40%) para o risk budgeting não concentrar nela.
+3. **T-bills fora do otimizador, como o caixa no onshore** (revisado em
+   2026-11-17; a decisão original era T-bills dentro, como "RF Pós-fixado", com
+   Max Weight de 40%). Medição: a classe tinha 12% no P1 e 0% de P2 a P10, então
+   tirá-la só muda o P1 (ver [avaliacao-modelo.md](avaliacao-modelo.md), seção 9).
+   O T-bill passa a servir só para balizar o risco total em momentos bullish ou
+   bearish (colchão de caixa sobre o perfil, fora do otimizador). A classe
+   "RF Pós-fixado" foi removida do Fibery em 2026-11-17 (classe, parâmetro e 13
+   correlações; o Offshore ficou com 13 classes e 78 pares). **Pendente:** desenhar o
+   colchão de caixa. As tabelas e o protótipo abaixo são de antes da remoção e ainda
+   mostram a classe.
 4. **Um representante por classe.** UCITS quando existir; senão o ETF US. Pares
    que eram escolha de duration ou estilo saem (SCHP, IGIB, FLOT, QQQ, MTUM,
    CTA, IALT).
