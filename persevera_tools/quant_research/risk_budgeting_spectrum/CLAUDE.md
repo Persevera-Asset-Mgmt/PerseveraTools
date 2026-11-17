@@ -4,7 +4,8 @@
 A alocação em caixa/CDI curto é uma decisão de liquidez, não de investimento,
 e por isso não entra no modelo, nos dois livros. Decisão de 2026-11-17: no
 Offshore os T-bills também ficam fora do otimizador e servem só para balizar o
-risco total (colchão de caixa, a desenhar). A classe "RF Pós-fixado" foi removida
+risco total (colchão de caixa, escolhido pelo usuário na página do Hub, padrão de 5%,
+nos dois livros; camada fora do motor: pesos × (1 − caixa), σ efetivo = (1 − caixa) × σ). A classe "RF Pós-fixado" foi removida
 do Fibery em 2026-11-17 (classe, parâmetro e 13 correlações): o Offshore tem 13
 classes e 78 pares, como o Onshore.
 
