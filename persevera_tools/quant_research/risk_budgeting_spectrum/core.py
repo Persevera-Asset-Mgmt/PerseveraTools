@@ -657,6 +657,63 @@ def _feasible_vol_range(
     return sigma_min_feas, best_max
 
 
+def check_sigma_range(
+    sigma_min: float,
+    sigma_max: float,
+    vols: np.ndarray,
+    max_weights: np.ndarray,
+    full_corr: np.ndarray,
+    label: Optional[str] = None,
+) -> None:
+    """
+    Levanta ValueError se a faixa [sigma_min, sigma_max] (em FRAÇÃO) não cabe
+    na faixa viável do universo (ver `_feasible_vol_range`). `label` (ex.: nome
+    da calibração) prefixa a mensagem.
+
+    Compartilhada pelo loader do Fibery e por quem altera σ depois do load
+    (`check_feasible_sigma`), para que a mesma regra valha nos dois caminhos.
+    """
+    prefix = f"Calibração '{label}': " if label else ""
+    sigma_min_feas, sigma_max_feas = _feasible_vol_range(vols, max_weights, full_corr)
+
+    if sigma_min < sigma_min_feas - 1e-6:
+        raise ValueError(
+            f"{prefix}Sigma Min = {sigma_min*100:.4f}% é inviável dado o "
+            f"universo. Vol mínima atingível (min-variance long-only) = "
+            f"{sigma_min_feas*100:.4f}%. "
+            f"Ajuste Sigma Min no Fibery para >= {sigma_min_feas*100:.4f}%."
+        )
+    if sigma_max > sigma_max_feas + 1e-6:
+        raise ValueError(
+            f"{prefix}Sigma Max = {sigma_max*100:.4f}% é inviável dado o "
+            f"universo. Vol máxima atingível = {sigma_max_feas*100:.4f}%."
+        )
+    if sigma_max <= sigma_min:
+        raise ValueError(
+            f"{prefix}Sigma Max ({sigma_max*100:.2f}%) deve ser "
+            f"estritamente maior que Sigma Min ({sigma_min*100:.2f}%)."
+        )
+
+
+def check_feasible_sigma(config: SpectrumConfig) -> None:
+    """
+    Verifica `config.sigma_min_pct` / `sigma_max_pct` contra a faixa viável do
+    universo. Use depois de `config.with_overrides(...)`, que não revalida σ.
+
+    Levanta
+    -------
+    ValueError : σ fora da faixa viável, ou o solver não convergiu num extremo.
+    """
+    check_sigma_range(
+        config.sigma_min_pct / 100.0,
+        config.sigma_max_pct / 100.0,
+        config.vols_array,
+        config.max_weights_array,
+        config.full_corr,
+        label=config.calibration_name,
+    )
+
+
 def compute_feasible_vol_range(config: SpectrumConfig) -> tuple[float, float]:
     """
     Calcula a faixa de volatilidade viável do universo da `config`:
