@@ -322,11 +322,28 @@ concentrariam o P10; **σ máximo é a alavanca certa**, não os tetos.
 
 ### 12.4 Ponto de atenção nos inputs
 
-Vol do Bitcoin: **34,9% no Onshore e 64,7% no Offshore**, mas as duas classes têm o **mesmo
-proxy** (`bitcoin_usd`) no Fibery. Com o mesmo proxy e o mesmo método a vol seria igual;
-pelo menos um dos dois números está fora do cálculo. O Onshore é o suspeito (34,9% é baixo para
-bitcoin e o cap de 8% está no teto no P10). Ouro tem diferença parecida: 23,9% (Onshore,
-`gold_100oz_futures`) contra 17,3% (Offshore, `gold`), proxies diferentes. Validar com
-`scripts/rbs_conferir_inputs.py`, que recalcula a vol EWMA (λ = 0,995, método da página
-Capital Market Assumptions do Hub) e as correlações de longo prazo a partir de `indicadores` e
-compara com a calibração. Precisa de acesso ao banco, que esta sessão não tinha.
+Conferência contra `indicadores` (leitura, 2026-11-17; EWMA λ = 0,995 sobre a série própria de
+cada proxy; vol semanal simples = desvio-padrão dos retornos semanais da janela de 15 anos):
+
+| Classe (proxy) | Fibery | EWMA hoje | Semanal 15a |
+|---|---|---|---|
+| Bitcoin Onshore (`bitcoin_usd`) | 34,9 | **35,1** | 82,5 |
+| Bitcoin Offshore (`bitcoin_usd`) | 64,7 | 35,1 | 82,5 |
+| Ouro Onshore (`gold_100oz_futures`) | 23,9 | **24,6** | 16,1 |
+| Ouro Offshore (`gold`) | 17,3 | 24,7 | 15,6 |
+| RV EUA (`us_sp500`) | 14,8 | **15,0** | 15,7 |
+| RV Brasil (`br_ibovespa`) | 17,6 | 24,1 | 21,9 |
+| RF Inflação Longa (`anbima_ima_b5+`) | 7,1 | 13,6 | 10,9 |
+| RF Pré Longa (`anbima_irf_m1+`) | 5,1 | 9,5 | 5,5 |
+| Long & Short | 5,0 | 12,3 | 7,5 |
+
+Achados:
+- **O Bitcoin Onshore (34,9) está certo para o método da CMA**; é o Offshore (64,7) que não
+  segue o EWMA (parece o estimador semanal simples, de uma janela mais curta). Os dois livros
+  foram calibrados com métodos diferentes: Onshore, EWMA; Offshore, `estimation.py` antigo.
+- O ouro dos dois livros é praticamente a mesma série (EWMA 24,6 contra 24,7); em 2026-11-17
+  as duas classes passaram a usar `gold_100oz_futures` (decisão do responsável).
+- **O Onshore (calibração de 2026-10-14) é anterior ao choque de 2026-10-26**, quando no mesmo dia o
+  IMA-B 5+ caiu 9,8%, o Ibovespa 13,9%, o IRF-M1+ 6,4% e o IDA IPCA 5,7%. O EWMA de hoje já
+  carrega isso; as vols do Fibery em renda fixa e RV Brasil estão 40 a 90% abaixo.
+  A calibração precisa ser refeita (ver pipeline-atualizacao.md).
