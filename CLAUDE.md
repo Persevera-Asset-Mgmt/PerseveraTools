@@ -6,7 +6,14 @@ renda fixa, pesquisa quant (factor investing, risk budgeting) e integrações
 
 ## Regras de trabalho
 - Antes de alterar código, explicar o diagnóstico e propor a mudança.
-- Não escrever nem apagar nada no Fibery; exclusões de campos são feitas manualmente.
+- Fibery: leitura livre. Escrita (criar, alterar ou apagar **registros**) só com
+  permissão explícita do usuário para aquela ação, dada na conversa. Antes de
+  escrever, mostrar o que será feito (database, registros, valor atual → novo);
+  depois, o que foi feito. A permissão vale só para a ação descrita; não se estende
+  a outras nem a outra sessão. Apagar exige o nome exato dos registros, sem lote
+  além do pedido. Mudar o schema (criar ou excluir campos e databases) e excluir
+  campos continuam sendo feitos manualmente. Código do pacote que escreve no
+  Fibery só entra por PR revisado.
 - Commit e push só quando pedido; mudanças vão por branch + PR, nunca direto no `main`.
 
 ## Ambiente
