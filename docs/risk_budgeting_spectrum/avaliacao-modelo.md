@@ -198,9 +198,9 @@ o σ mínimo de 2% continua válido.
   Curta com 31% do risco.
 - Sensibilidade e falhas iguais às do caso com T-bill: nos 6 sorteios, o P10 em
   `penalty` nos sorteios 3 e 4, como antes.
-- O colchão de caixa é uma camada à parte (não implementada): com fração `c` em
-  T-bill, o risco da carteira é aproximadamente `(1 − c)·σ` do perfil, mantendo a
-  composição do perfil. Exemplo: `c` = 35% sobre o P7 (σ 7,3%) leva o risco a ~4,75%, o σ
+- O colchão de caixa é uma camada à parte (implementada na página do Hub, PerseveraHub
+  #46, padrão de 5%, nos dois livros): com fração `c` em caixa, o risco da carteira é
+  `(1 − c)·σ` do perfil (caixa a risco zero), mantendo a composição do perfil. Exemplo: `c` = 35% sobre o P7 (σ 7,3%) leva o risco a ~4,75%, o σ
   do P5, mas com a composição do P7, não a do P5.
 
 ### Onshore × Offshore
@@ -232,3 +232,31 @@ crédito HY e o T-bill ser irrelevante.
 - **T-bills:** fora do otimizador no Offshore (seção 9).
 - **Colchão de caixa:** camada fora do otimizador, escolhida pelo usuário, padrão de 5%,
   nos dois livros; implementada na página do Hub (PerseveraHub #46).
+
+## 11. Checagem de robustez sobre as calibrações vigentes (2026-11-17)
+
+`scripts/rbs_robustez.py --status Rascunho --sugerir-sigma-max` (6 sorteios, vol ×
+exp(N(0; 0,15)), semente 100, passo de 0,5 p.p.), com o loader real e os dados
+lidos do Fibery pelo conector (a leitura foi trocada por dados do conector, pois não
+havia token no ambiente; o loader passou com o Offshore já sem "RF Pós-fixado": 13
+classes, 78 pares).
+
+| | Onshore (2026-10-14) | Offshore (2026-11-09) |
+|---|---|---|
+| σ mín.–máx. | 1,9%–11,5% | 2,0%–14,0% |
+| Perfis instáveis | P9 (1 de 6 sorteios), P10 (4 de 6) | P10 (2 de 6) |
+| σ máximo ÷ teto viável (base) | 0,90 | 0,81 |
+| σ máximo testado → instáveis | 11,5: P9, P10 · 11,0: P9, P10 · 10,5: P10 · 10,0: P10 · 9,5: nenhum | 14,0: P10 · 13,5: P10 · 13,0: nenhum |
+| Sugestão do script | **9,5%** | **13,0%** |
+
+Observações:
+- O Onshore replica a medição manual da seção 4 (P10 em penalidade nos sorteios 2, 3,
+  5 e 6; P9 no 3). O sorteio 3 tem teto viável de 11,06%, abaixo do σ máximo atual,
+  e é o que puxa a sugestão para 9,5%: sem ele, 10,5% já resolveria.
+- Aplicada à letra, a regra de recalibração cortaria o topo do Onshore em 2 p.p. (e o do
+  Offshore em 1 p.p.) por causa de poucos sorteios. O critério "estável em todos os
+  sorteios" é rigoroso; a decisão sobre ele (e sobre aplicar já o corte) é do responsável
+  e não foi tomada.
+- Classes mais sensíveis (desvio-padrão do peso entre sorteios, p.p.): Onshore, Inflação
+  Longa 9,6, Fundo Crédito HY 8,7, Inflação Curta 8,2; Offshore, Ações EUA 12,4,
+  Treasury Longa 9,9, Ações DM ex-EUA 9,0.
