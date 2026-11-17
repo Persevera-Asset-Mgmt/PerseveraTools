@@ -220,3 +220,15 @@ As mesmas fragilidades nos dois livros: composição dentro do bucket sensível,
 no limite do teto, risco concentrado em uma classe de ações nas pontas. O problema
 próprio do Onshore são as classes de premissa; o do Offshore é o RF das pontas ser
 crédito HY e o T-bill ser irrelevante.
+
+## 10. Decisões (2026-11-17)
+
+- **P10:** fica como está na calibração vigente (Onshore σ máximo 11,5%; Offshore 14%).
+  Ele converge; mexer sem necessidade mudaria o produto sem ganho comprovado, e subir o
+  teto de peso das ações concentraria mais um perfil já concentrado.
+- **Recalibração:** antes de aprovar, rodar `scripts/rbs_robustez.py`; se algum perfil for
+  instável, reduzir o σ máximo até convergir (o teste de isolamento da seção 4 sugere
+  começar por 10,5%). Regra no `CLAUDE.md` do módulo.
+- **T-bills:** fora do otimizador no Offshore (seção 9).
+- **Colchão de caixa:** camada fora do otimizador, escolhida pelo usuário, padrão de 5%,
+  nos dois livros; implementada na página do Hub (PerseveraHub #46).

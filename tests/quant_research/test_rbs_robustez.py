@@ -1,0 +1,85 @@
+"""Checagem de robustez do RBS a perturbações de vol. Offline."""
+import numpy as np
+import pytest
+
+from persevera_tools.quant_research.risk_budgeting_spectrum import (
+    AssetClass, BucketConfig, RCTarget, SpectrumConfig)
+from persevera_tools.quant_research.risk_budgeting_spectrum.robustness import (
+    perturb_vols, robustness_report, suggest_sigma_max)
+
+RF, ALT, RV = "Renda Fixa", "Alternativos", "Renda Variável"
+
+
+def _config(**kw) -> SpectrumConfig:
+    assets = [
+        AssetClass("RF Curta", RF, "", 0.02, 1.0),
+        AssetClass("RF Longa", RF, "", 0.06, 1.0),
+        AssetClass("Ouro", ALT, "", 0.15, 0.30),
+        AssetClass("RV Brasil", RV, "", 0.20, 0.60),
+        AssetClass("RV EUA", RV, "", 0.16, 0.60),
+    ]
+    corr = np.full((5, 5), 0.2)
+    np.fill_diagonal(corr, 1.0)
+    base = dict(
+        assets=assets,
+        buckets={b: BucketConfig(b, b) for b in (RF, ALT, RV)},
+        rc_targets={RF: RCTarget(RF, 1.0, 0.2), ALT: RCTarget(ALT, 0.0, 0.2), RV: RCTarget(RV, 0.0, 0.6)},
+        full_corr=corr, sigma_min_pct=2.5, sigma_max_pct=6.0, n_profiles=2, min_weight_threshold=0.0,
+    )
+    base.update(kw)
+    return SpectrumConfig(**base)
+
+
+def test_perturbacao_e_reprodutivel_e_nao_altera_o_original():
+    cfg = _config()
+    a, b = perturb_vols(cfg, 0.15, seed=1), perturb_vols(cfg, 0.15, seed=1)
+    c = perturb_vols(cfg, 0.15, seed=2)
+    assert [x.default_vol for x in a.assets] == [x.default_vol for x in b.assets]
+    assert [x.default_vol for x in a.assets] != [x.default_vol for x in c.assets]
+    assert [x.default_vol for x in cfg.assets] == [0.02, 0.06, 0.15, 0.20, 0.16]
+    assert (a.full_corr == cfg.full_corr).all()
+    assert [x.max_weight for x in a.assets] == [x.max_weight for x in cfg.assets]
+
+
+def test_sigma_zero_nao_perturba():
+    cfg = _config()
+    assert [x.default_vol for x in perturb_vols(cfg, 0.0, seed=3).assets] == [
+        x.default_vol for x in cfg.assets]
+
+
+def test_relatorio_de_calibracao_estavel():
+    rep = robustness_report(_config(), n_draws=2, sigma=0.05)
+    assert list(rep["perfis"].index) == [1, 2]
+    assert rep["instaveis"] == []
+    assert rep["perfis"]["estavel"].all()
+    assert list(rep["teto_viavel"].index) == [0, 1, 2]
+    assert (rep["teto_viavel"]["sigma_max_sobre_teto"] < 1).all()
+    assert rep["peso_std_pp"].shape == (5, 2)
+    assert (rep["peso_std_pp"].values >= 0).all()
+
+
+def test_sigma_inviavel_aparece_como_perfil_instavel():
+    rep = robustness_report(_config(sigma_max_pct=40.0), n_draws=0)
+    assert rep["instaveis"], "σ máximo acima do teto viável deveria deixar perfil instável"
+    assert not rep["perfis"].loc[rep["instaveis"], "estavel"].any()
+    assert (rep["teto_viavel"]["sigma_max_sobre_teto"] > 1).any()
+
+
+def test_sugestao_devolve_o_proprio_sigma_max_se_ja_for_estavel():
+    best, tried = suggest_sigma_max(_config(), n_draws=1, sigma=0.05, max_steps=2)
+    assert best == 6.0
+    assert tried == [(6.0, [])]
+
+
+def test_sugestao_none_quando_nada_resolve():
+    best, tried = suggest_sigma_max(_config(sigma_max_pct=40.0), n_draws=0, step_pct=0.5, max_steps=1)
+    assert best is None
+    assert [t[0] for t in tried] == [40.0, 39.5]
+    assert all(bad for _, bad in tried)
+
+
+def test_sugestao_para_antes_de_chegar_ao_sigma_min():
+    cfg = _config(sigma_min_pct=5.8, sigma_max_pct=6.0)
+    best, tried = suggest_sigma_max(cfg, n_draws=0, step_pct=0.5, max_steps=4)
+    assert [t[0] for t in tried] == [6.0] or best == 6.0
+    assert all(sig > cfg.sigma_min_pct for sig, _ in tried)
