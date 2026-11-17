@@ -278,36 +278,18 @@ def _build_config_from_calibration(
     full_corr = _build_full_corr_matrix(assets, corr_df)
 
     # Hard validation: faixa de vol viável dado o universo
-    from ..core import _feasible_vol_range
+    from ..core import check_sigma_range
     try:
-        sigma_min_feas, sigma_max_feas = _feasible_vol_range(
+        check_sigma_range(
+            sigma_min,
+            sigma_max,
             vols=np.array([a.default_vol for a in assets]),
             max_weights=np.array([a.max_weight for a in assets]),
             full_corr=full_corr,
+            label=calibration_name,
         )
     except ValueError as exc:
         raise FiberyLoaderError(str(exc)) from exc
-
-    if sigma_min < sigma_min_feas - 1e-6:
-        raise FiberyLoaderError(
-            f"Calibração '{calibration_name}': Sigma Min = {sigma_min*100:.4f}% "
-            f"é inviável dado o universo. Vol mínima atingível (min-variance "
-            f"long-only) = {sigma_min_feas*100:.4f}%. "
-            f"Ajuste Sigma Min no Fibery para >= {sigma_min_feas*100:.4f}%."
-        )
-
-    if sigma_max > sigma_max_feas + 1e-6:
-        raise FiberyLoaderError(
-            f"Calibração '{calibration_name}': Sigma Max = {sigma_max*100:.4f}% "
-            f"é inviável dado o universo. Vol máxima atingível = "
-            f"{sigma_max_feas*100:.4f}%."
-        )
-
-    if sigma_max <= sigma_min:
-        raise FiberyLoaderError(
-            f"Calibração '{calibration_name}': Sigma Max ({sigma_max*100:.2f}%) "
-            f"deve ser estritamente maior que Sigma Min ({sigma_min*100:.2f}%)."
-        )
 
     # ── Montar SpectrumConfig
     config = SpectrumConfig(

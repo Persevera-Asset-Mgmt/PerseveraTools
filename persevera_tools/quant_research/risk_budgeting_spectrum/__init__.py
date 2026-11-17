@@ -14,7 +14,12 @@ Uso típico:
     result = build_spectrum(config)
 """
 
-from .core import build_spectrum, get_profile_summary, compute_feasible_vol_range
+from .core import (
+    build_spectrum,
+    get_profile_summary,
+    compute_feasible_vol_range,
+    check_feasible_sigma,
+)
 from .config import (
     SpectrumConfig,
     AssetClass,
@@ -26,6 +31,7 @@ __all__ = [
     "build_spectrum",
     "get_profile_summary",
     "compute_feasible_vol_range",
+    "check_feasible_sigma",
     "SpectrumConfig",
     "AssetClass",
     "BucketConfig",
