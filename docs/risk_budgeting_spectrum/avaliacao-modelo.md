@@ -288,7 +288,8 @@ Dados reais do Fibery lidos pelo conector, já com σ máximo de 10,5% (Onshore)
 
 A checagem passou a aceitar `--sigma-corr`: cada correlação vira
 tanh(arctanh ρ + N(0, s)), simétrica e reprojetada na correlação PSD mais próxima (Higham).
-Default 0 (não perturba), então a regra de recalibração segue como estava até decisão.
+Decisão do responsável (2026-11-17): `--sigma-corr 0,10` passa a ser o padrão da checagem; o
+Onshore foi para σ máximo 9,5% no Fibery (Offshore segue em 13%).
 Em 15 anos de dados semanais o erro estatístico de z é ~0,03; s = 0,10 é conservador e
 representa mudança de regime. Mesmos 6 sorteios de vol (semente 100), mais ruído de correlação:
 
@@ -321,6 +322,11 @@ concentrariam o P10; **σ máximo é a alavanca certa**, não os tetos.
 
 ### 12.4 Ponto de atenção nos inputs
 
-Vol do Bitcoin: **34,9% no Onshore e 64,7% no Offshore**. Dependendo do proxy pode haver
-explicação (moeda, ETF, janela do EWMA); se não houver, é erro de input, e o Onshore estaria
-subestimando o risco da classe (cap de 8% no teto no P10). A verificar na recalibração.
+Vol do Bitcoin: **34,9% no Onshore e 64,7% no Offshore**, mas as duas classes têm o **mesmo
+proxy** (`bitcoin_usd`) no Fibery. Com o mesmo proxy e o mesmo método a vol seria igual;
+pelo menos um dos dois números está fora do cálculo. O Onshore é o suspeito (34,9% é baixo para
+bitcoin e o cap de 8% está no teto no P10). Ouro tem diferença parecida: 23,9% (Onshore,
+`gold_100oz_futures`) contra 17,3% (Offshore, `gold`), proxies diferentes. Validar com
+`scripts/rbs_conferir_inputs.py`, que recalcula a vol EWMA (λ = 0,995, método da página
+Capital Market Assumptions do Hub) e as correlações de longo prazo a partir de `indicadores` e
+compara com a calibração. Precisa de acesso ao banco, que esta sessão não tinha.

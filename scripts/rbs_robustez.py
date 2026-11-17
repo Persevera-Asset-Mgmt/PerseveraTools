@@ -42,7 +42,7 @@ def main() -> int:
     ap.add_argument("--sigma", type=float, default=DEFAULT_SIGMA,
                     help="desvio-padrão do log da vol (default 0,15)")
     ap.add_argument("--sigma-corr", type=float, default=DEFAULT_CORR_SIGMA,
-                    help="desvio-padrão do z de Fisher de cada correlação (default 0 = não perturba)")
+                    help="desvio-padrão do z de Fisher de cada correlação (default 0,10; 0 = não perturba)")
     ap.add_argument("--semente", type=int, default=DEFAULT_SEED)
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--incluir-inviaveis", action="store_true",

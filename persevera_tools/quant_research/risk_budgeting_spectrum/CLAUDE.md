@@ -41,10 +41,13 @@ aprovar** (`--sugerir-sigma-max` testa valores menores, em passos de 0,5 p.p.). 
 valor resolver, revisar os tetos de peso ou as vols; não aprovar com perfil instável sem
 registrar a decisão. Subir o teto de peso das ações não é o caminho (concentra o P10).
 
-Decisão de 2026-11-17: σ máximo ajustado para 10,5% (Onshore) e 13% (Offshore) pelo critério
-acima, só com perturbação de vol. `--sigma-corr 0,10` também perturba as correlações (z de
-Fisher): o Offshore segue estável, o Onshore pede 9,5% (avaliacao-modelo.md, seção 12). Se
-esse passa a ser o critério padrão é decisão em aberto.
+Decisão de 2026-11-17: a checagem perturba também as correlações (`--sigma-corr`, padrão 0,10,
+z de Fisher). Com ela, σ máximo 9,5% no Onshore e 13% no Offshore (aplicados no Fibery;
+avaliacao-modelo.md, seção 12).
+
+Inputs: Default Vol = EWMA diária com λ = 0,995 (√252) e correlação semanal de longo prazo
+(15 anos), como a página Capital Market Assumptions do Hub. `scripts/rbs_conferir_inputs.py`
+recalcula os dois a partir de `indicadores` e compara com a calibração (precisa de banco).
 O código está em `risk_budgeting_spectrum/robustness.py`.
 
 ## Estado da calibração

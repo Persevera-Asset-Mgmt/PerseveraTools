@@ -43,9 +43,13 @@
 
 ## Pontos a decidir
 
-1. **Parâmetros do EWMA**: λ ou meia-vida, frequência (diária ou semanal), anualização e
-   janela mínima. O `estimation.py` precisa reproduzir exatamente o que gera os números
-   do Fibery hoje (`calculate_ewma_volatility` em `metrics.py` usa λ = 0,94 diário por padrão).
+1. ~~Parâmetros do EWMA~~ (resolvido): a página CMA do Hub usa `calculate_ewma_volatility(decay=0,995)`
+   sobre preços diários (retorno simples, anualizado por √252; meia-vida de ~138 dias úteis) e
+   correlação de retornos semanais simples (`resample("W")`) na janela de 15 anos, par a par,
+   sem correção PSD. `estimation.ewma_vols` e `estimation.cma_correlation` reproduzem isso.
+   O estimador antigo do `estimation.py` (desvio-padrão semanal de log-retorno, PSD de Higham)
+   fica como alternativa e **não** é o que gerou os números atuais. Pendente: confirmar que a
+   calibração atual foi gerada exatamente assim (`scripts/rbs_conferir_inputs.py`).
 2. **Suavização da vol**: o EWMA já pesa o recente; a pergunta é se misturamos com a vol de
    longo prazo (σ = w·σ_EWMA + (1 − w)·σ_LP) para reduzir o giro entre calibrações. Dá para
    medir com o histórico (reestimar mês a mês e comparar o giro dos pesos), mas precisa do

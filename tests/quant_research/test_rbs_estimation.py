@@ -67,3 +67,28 @@ def test_pairwise_falha_com_historico_curto():
 def test_metodo_invalido():
     with pytest.raises(ValueError, match="method"):
         estimate_class_stats(SPECS, _prices(), method="ewma")
+
+
+def test_ewma_vols_usa_o_calculo_da_pagina_cma():
+    from persevera_tools.quant_research.metrics import calculate_ewma_volatility
+    from persevera_tools.quant_research.risk_budgeting_spectrum.estimation import ewma_vols
+    rng = np.random.default_rng(0)
+    idx = pd.bdate_range("2020-01-01", periods=600)
+    px = pd.DataFrame({"a": 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 600))),
+                       "b": 100 * np.exp(np.cumsum(rng.normal(0, 0.02, 600)))}, index=idx)
+    v = ewma_vols(px)
+    assert v["a"] == calculate_ewma_volatility(px["a"], decay=0.995).iloc[-1]
+    assert 0.10 < v["a"] < 0.22 and v["b"] > v["a"]
+
+
+def test_cma_correlation_semanal_simetrica():
+    from persevera_tools.quant_research.risk_budgeting_spectrum.estimation import cma_correlation
+    rng = np.random.default_rng(1)
+    idx = pd.bdate_range("2018-01-01", periods=900)
+    base = rng.normal(0, 0.01, 900)
+    px = pd.DataFrame({"a": 100 * np.exp(np.cumsum(base)),
+                       "b": 100 * np.exp(np.cumsum(base + rng.normal(0, 0.003, 900))),
+                       "c": 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 900)))}, index=idx)
+    c = cma_correlation(px)
+    assert np.allclose(c.values, c.values.T) and np.allclose(np.diag(c.values), 1.0)
+    assert c.loc["a", "b"] > 0.8 and abs(c.loc["a", "c"]) < 0.3

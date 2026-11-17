@@ -34,7 +34,7 @@ from .core import build_spectrum, compute_feasible_vol_range
 from .estimation import nearest_correlation
 
 DEFAULT_SIGMA = 0.15      # desvio-padrão do log da vol (15%)
-DEFAULT_CORR_SIGMA = 0.0  # desvio-padrão do z de Fisher de cada correlação (0 = não perturba)
+DEFAULT_CORR_SIGMA = 0.10  # desvio-padrão do z de Fisher de cada correlação (0 = não perturba)
 DEFAULT_DRAWS = 6
 DEFAULT_SEED = 100
 
