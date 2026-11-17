@@ -2,8 +2,11 @@
 
 ## Premissa
 A alocação em caixa/CDI curto é uma decisão de liquidez, não de investimento,
-e por isso não entra no modelo. Exceção: no livro Offshore, T-bills entram
-como classe "Pós-fixado", com Max Weight.
+e por isso não entra no modelo, nos dois livros. Decisão de 2026-11-17: no
+Offshore os T-bills também ficam fora do otimizador e servem só para balizar o
+risco total (colchão de caixa, a desenhar). **Pendente:** a calibração Offshore
+no Fibery (2026-11-09) ainda tem a classe "RF Pós-fixado"; ela deve ser removida
+à mão (classe, parâmetros e 13 correlações).
 
 ## Livros
 Onshore (BRL) e Offshore (USD) usam o mesmo motor e as mesmas tabelas do

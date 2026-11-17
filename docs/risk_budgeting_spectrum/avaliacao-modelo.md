@@ -185,6 +185,24 @@ Todos os 10 perfis convergem em modo `hard`.
    o modelo as zera. Bitcoin implícito de 8% de excesso a.a. no P10 (Sharpe 0,13, vol
    65%). Só diagnóstico, como no Onshore: sem retorno esperado de referência.
 
+### Offshore sem T-bill (decisão de 2026-11-17)
+
+Mesma rodada (10 cenários) com a classe "RF Pós-fixado" removida do universo: 13
+classes, 78 correlações. Faixa viável 1,19%–17,35% (com a classe: 0,75%–17,35%), então
+o σ mínimo de 2% continua válido.
+
+- **Só o P1 muda.** Do P2 ao P10 os pesos são idênticos aos do caso base, porque a
+  classe já estava zerada. O P1 passa a ter Treasury Curta 52,5% (antes 39,0%),
+  Inflação 25,1% (20,7%), MBS 12,4% (9,3%), Treasury Longa 5,7% (7,3%) e Crédito IG
+  4,3% (7,3%); HY zera (4,0%). Fica mais concentrado: HHI 0,36 (0,23) e Treasury
+  Curta com 31% do risco.
+- Sensibilidade e falhas iguais às do caso com T-bill: nos 6 sorteios, o P10 em
+  `penalty` nos sorteios 3 e 4, como antes.
+- O colchão de caixa é uma camada à parte (não implementada): com fração `c` em
+  T-bill, o risco da carteira é aproximadamente `(1 − c)·σ` do perfil, mantendo a
+  composição do perfil. Reduzir `c` de 35% no P7 (σ 7,3%) leva o risco a ~4,75%, o σ
+  do P5, mas com a composição do P7, não a do P5.
+
 ### Onshore × Offshore
 
 | | Onshore | Offshore |
