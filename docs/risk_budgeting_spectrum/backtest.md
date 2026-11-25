@@ -2,7 +2,7 @@
 
 - **Status:** Implementado (`backtest.py`, `scripts/rbs_backtest.py`); resultados abaixo são do
   estudo de 2026-11-23, com dados mensais extraídos do banco por consulta de leitura.
-- **Atualizado em:** 2026-11-23
+- **Atualizado em:** 2026-11-25
 - **Pergunta:** o σ-alvo de cada perfil se confirma quando vols e correlações são re-estimadas
   a cada trimestre só com dados até a data, e a carteira fica parada até o próximo rebalanceamento?
 
@@ -94,6 +94,46 @@
    estresse e o σ precisam andar juntos nas lâminas (ver [avaliacao-modelo.md](avaliacao-modelo.md)).
 3. **O P1 do Onshore depende de dois fundos de crédito sem série.** Enquanto não houver proxy,
    os tetos de 15% e 10% limitam a exposição ao que não conseguimos medir.
+
+## Drawdown do P1 e σ mínimo (estudo de 2026-11-25)
+
+O drawdown do P1 (Onshore −4,4%, Offshore −8,6%) pareceu alto para um perfil conservador. Decomposição:
+
+- **Onshore, fev–mar/2020 (cenário fundos = IDA-IPCA, sem tetos):** −4,6% em um mês, com ~80% do P1 em
+  crédito (IDA-DI 44%, fundos GI 20% e HY 6%, crédito inflação 10%). Contribuições: IDA-DI −2,15 p.p.,
+  GI −1,15, crédito inflação −0,58, HY −0,36.
+- **Offshore, jul/2021 a set/2022:** −8,6%, com todas as pernas de renda fixa caindo juntas (MBS −2,30 p.p.,
+  Treasury curta −1,97, Treasury longa −1,84, IG −1,28, HY −1,21, inflação −0,55).
+
+Variantes testadas (backtest completo, mesma configuração acima), P1:
+
+| Variante | Máx. DD | σ real ÷ alvo | Observação |
+|---|---|---|---|
+| Onshore, tetos GI 15% / HY 10% | −4,40% | 1,17 | 38 de 60 datas com algum perfil sem convergir |
+| + IDA-DI máx. 35% ou 30% | −4,41% | 1,26 | 60 de 60 sem convergir; máx. 25% é rejeitado (vol mínima do universo > 2,0%) |
+| Offshore base | −8,55% | 1,12 | |
+| + MBS e Treasury longa máx. 10% | −8,19% | 1,10 | |
+| + HY máx. 5% | −7,75% | 1,10 | P5 piora (−14,8% para −16,7%) |
+
+Nenhuma variante reduz o drawdown em um terço (critério fixado antes de rodar). No Onshore o pior mês
+(março de 2020) foi de −4,3% a −4,5% em **todos** os perfis, então o drawdown é do universo, não da
+carteira do P1. **Caixa não entra no modelo** (posição em caixa é decisão de liquidez), então não há
+classe para amortecer a perda.
+
+σ mínimo do P1 Onshore (com tetos GI/HY; fundos = IDA-DI / IDA-IPCA):
+
+| σ mínimo | Datas sem convergir (de 60) | σ real ÷ alvo | Máx. DD % | Retorno a.a. % (DI) |
+|---|---|---|---|---|
+| 1,9% | 38 | 1,17 / 1,63 | −4,40 / −4,58 | 10,59 |
+| 2,0% | 33 | 1,12 / 1,57 | −4,48 / −4,67 | 10,55 |
+| 2,1% | 29 | 1,06 / 1,48 | −4,41 / −4,60 | 10,44 |
+| 2,2% | 23 | 1,02 / 1,42 | −4,43 / −4,63 | 10,68 |
+
+Subir o σ mínimo melhora a convergência e aproxima o σ realizado do alvo, mas **não reduz o drawdown**
+(diferenças de 0,1 p.p., dentro do ruído de dado mensal). Também desloca a curva de P2 a P9 (em 2,2%, P2
+de 2,31% para 2,63% de σ-alvo). Não verificado: por que 23 datas ainda não convergem em 2,2%.
+Decisão de 2026-11-25: σ mínimo Onshore 2,2% e tetos de 15% (GI) e 10% (HY) gravados na calibração
+2026-11-17; a comunicação do drawdown e do estresse ao lado do σ segue como recomendação.
 
 ## Limitações
 
