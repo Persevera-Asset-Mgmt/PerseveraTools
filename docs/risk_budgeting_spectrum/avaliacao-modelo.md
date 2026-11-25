@@ -399,3 +399,49 @@ peso mínimo 0,5% e 2%. Vol das classes com proxy: 50% EWMA (λ = 0,995) + 50% s
 GI e HY (sem proxy), tetos de peso, RC targets. As calibrações anteriores (2026-10-14 e
 2026-11-09) seguem como Rascunho. Como o Hub usa a calibração mais avançada e, no mesmo status,
 a mais recente, ele passa a usar as novas quando o cache de 1 h expirar.
+
+## 13. Estresse das carteiras e parecer sobre os demais parâmetros (2026-11-17)
+
+Calibrações de 2026-11-17 (vol mista, Bitcoin em EWMA, σ máx 11,0%); pesos de P1 a P10 do motor;
+retornos dos índices em janelas históricas, sem custos e sem colchão de caixa (com 5%, × 0,95).
+Janelas escolhidas por mim, incluindo crises conhecidas; não é uma amostra aleatória.
+
+**Cuidados com os dados.** A série `usd_brl` do banco está cotada ao contrário (USD por BRL:
+0,2291 em 19/02/2020, 0,1945 em 23/03/2020, 0,1727 em 16/11/2026). No estresse do Onshore o
+USD/BRL verdadeiro é 1/série. A página CMA do Hub rotula essa série como "Real (USD/BRL)", então a
+performance dela aparece com o sinal oposto ao do rótulo (a confirmar no Hub).
+Fundos de crédito do Onshore (sem proxy): foram simulados como IDA-DI (otimista) e como IDA-IPCA
+(conservador, limite superior da perda).
+
+| Retorno (%) | P1 | P5 | P10 |
+|---|---|---|---|
+| Onshore, dia 26/10/2026 (fundos = IDA-DI / IDA-IPCA) | −1,0 / −3,1 | −1,4 / −3,9 | +0,1 |
+| Onshore, COVID (fev-mar/2020) | −2,8 | −7,7 | −19,5 |
+| Onshore, juros 2022 (jan-out) | +10,2 | +4,5 | −10,6 |
+| Offshore, COVID | −2,4 | −9,8 | −26,7 |
+| Offshore, juros 2022 (jan-out) | −6,6 | −10,8 | −23,6 |
+
+Observações:
+- O σ-alvo mede o risco em tempos normais. Nas crises as perdas ficam de 3 a 9 desvios-padrão da
+  janela, em todos os perfis (COVID: cerca de −6σ no Onshore e −4σ a −9σ no Offshore; no dia
+  26/10 o Onshore P1 a P6 perde de 5σ a 9σ, e de 15σ a 25σ com fundos = IDA-IPCA).
+- No choque de 26/10 os perfis intermediários do Onshore (P2 a P6) perdem mais que o P10, que tem
+  pouca renda fixa doméstica e ativos em USD, que se valorizam em BRL. O P1 do Onshore não é
+  "conservador" diante de um choque de juros domésticos: seu risco é todo de renda fixa.
+- Offshore 2022: todos os perfis perdem; o P1 perdeu 6,6% (3,7σ), porque o risco está em duration
+  e crédito.
+- Choque de vols × 1,5 com correlações → ρ + 0,5(1 − ρ): o σ dobra em todos os perfis (razão de
+  1,8 a 2,1); a diversificação do modelo depende de correlações baixas.
+
+### 13.1 Parecer sobre os parâmetros do Fibery além de vols e correlações
+
+- **Mudar:** os fundos de crédito do Onshore (Fundo Crédito GI e HY). Vol (2,5% e 4,0%) e correlações
+  são manuais, sem proxy, e esses dois fundos somam de 27% (P1) a 43% (P5) da carteira. No cenário
+  conservador o P1 perde 3× mais no choque de 26/10. Dar um proxy ou limitar o Max Weight (ex.:
+  15% e 10%) até haver série.
+- **Manter:** tetos de peso (elevar não ajuda: ganho de 0,1 a 0,5 p.p. no teto de vol por 5 p.p.),
+  RC targets, curvaturas, RC Intra-Bucket, N Profiles e σ mínimo; são política do Comitê. O
+  que falta é registrar por que os RC targets diferem entre os livros (Alternativos 25% no
+  Onshore e 15% no Offshore; Renda Variável 70% e 80%).
+- **Opcional:** unificar o piso de peso mínimo em 1% (0,5% no Onshore e 2% no Offshore); efeito
+  só na composição (seção 12.2).
