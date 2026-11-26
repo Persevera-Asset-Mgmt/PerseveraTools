@@ -1,7 +1,7 @@
 # RBS offshore: espectro de alocação em USD
 
 - **Status:** Proposta (loader por livro em PR #35, estimação par a par neste PR; calibração em Rascunho no Fibery)
-- **Atualizado em:** 2026-11-09
+- **Atualizado em:** 2026-11-26 (piso de peso mínimo do Offshore de 2% para 0,5%; ver avaliacao-modelo.md §14)
 
 ## Ponto de partida
 
@@ -211,6 +211,7 @@ ser estimado só desde 2019 (DBMF) enquanto as outras classes usam 2005–2026.
 - Trend com histórico curto (DBMF desde 2019); índice próprio de TSMOM com os
   futuros da base resolveria.
 - Piso de 2% gera saltos entre perfis (TIPS zera do P7 em diante, trend entra
-  no P8 e sai no P9).
+  no P8 e sai no P9). Resolvido em parte em 2026-11-26: com piso de 0,5% o Trend
+  fica entre 3,7% e 6,5% de P1 a P7 (com 2% ia de 3,7% a 10,9%); P8 e P10 seguem sem Trend.
 - Walk-forward fora da amostra.
 - Campos de ticker (US, UCITS, XP) no catálogo para gerar a cesta da IBKR.

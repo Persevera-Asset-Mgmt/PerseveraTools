@@ -44,7 +44,10 @@ registrar a decisão. Subir o teto de peso das ações não é o caminho (concen
 Decisão de 2026-11-17: a checagem perturba também as correlações (`--sigma-corr`, padrão 0,10,
 z de Fisher). Com ela, o σ máximo caiu para 9,5% (Onshore) e 13% (Offshore) em 2026-11-17
 (avaliacao-modelo.md, seção 12); as calibrações de 2026-11-17 em vigor (Em Comitê) usam 11%
-nos dois livros e σ mínimo 2,2% (Onshore) e 2,0% (Offshore). Valores atuais: consulte o Fibery.
+nos dois livros e σ mínimo 2,2% (Onshore) e 2,0% (Offshore). Piso de peso mínimo: 0,5% nos dois
+livros (Offshore passou de 2% em 2026-11-26; avaliacao-modelo.md, seção 14). O P10 Offshore com σ
+máximo de 11% é instável na robustez; a checagem sugere 10,5% (decisão do Comitê). Valores atuais:
+consulte o Fibery.
 
 Inputs: Default Vol = EWMA diária com λ = 0,995 (√252) e correlação semanal de longo prazo
 (15 anos), como a página Capital Market Assumptions do Hub. `scripts/rbs_conferir_inputs.py`
