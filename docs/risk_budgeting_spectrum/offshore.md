@@ -1,7 +1,7 @@
 # RBS offshore: espectro de alocação em USD
 
 - **Status:** Proposta (loader por livro em PR #35, estimação par a par neste PR; calibração em Rascunho no Fibery)
-- **Atualizado em:** 2026-11-26 (piso de peso mínimo do Offshore de 2% para 0,5%; ver avaliacao-modelo.md §14)
+- **Atualizado em:** 2026-11-26 (piso de peso mínimo do Offshore de 2% para 0,5%, ver avaliacao-modelo.md §14; instrumentos de implementação, ver seção própria)
 
 ## Ponto de partida
 
@@ -51,9 +51,10 @@ IGIB (IEF), CTA/IALT (DBMF), GLDM (ouro) e FBTC (bitcoin):
    5%, nos dois livros; pesos = (1 − caixa) × perfil e σ efetivo = (1 − caixa) × σ do
    perfil. As tabelas e o protótipo abaixo são de antes da remoção e ainda
    mostram a classe.
-4. **Um representante por classe.** UCITS quando existir; senão o ETF US. Pares
-   que eram escolha de duration ou estilo saem (SCHP, IGIB, FLOT, QQQ, MTUM,
-   CTA, IALT).
+4. **Um representante por classe e por versão.** Cada perfil tem duas versões de
+   implementação (ver "Instrumentos de implementação"): só ETFs listados nos EUA, e
+   ETFs + UCITS com prioridade para o UCITS. Pares que eram escolha de duration ou
+   estilo saem (SCHP, IGIB, FLOT, QQQ, MTUM, CTA, IALT).
 5. **Sem visões táticas nem regimes** nesta etapa, como no RBS onshore.
 6. **Alternativos com 15% do risco no P10** (onshore: 25%). Com 25%, o P10
    ficava com 37% em alternativos e ~55% em ações.
@@ -214,4 +215,76 @@ ser estimado só desde 2019 (DBMF) enquanto as outras classes usam 2005–2026.
   no P8 e sai no P9). Resolvido em parte em 2026-11-26: com piso de 0,5% o Trend
   fica entre 3,7% e 6,5% de P1 a P7 (com 2% ia de 3,7% a 10,9%); P8 e P10 seguem sem Trend.
 - Walk-forward fora da amostra.
-- Campos de ticker (US, UCITS, XP) no catálogo para gerar a cesta da IBKR.
+- Campos de ticker (US, UCITS, XP) no catálogo para gerar a cesta da IBKR (ver
+  "Instrumentos de implementação").
+
+## Instrumentos de implementação (2026-11-26)
+
+- **Status:** Proposta. O catálogo abaixo é um rascunho; TER, AUM, giro, índice replicado e tracking
+  contra a proxy ainda não foram verificados ticker a ticker (triagem pendente).
+
+Decisões do usuário (2026-11-26):
+
+1. **Duas versões por perfil.** (A) só ETFs listados nos EUA; (B) ETFs + UCITS, com prioridade para
+   o UCITS. Onde não há UCITS equivalente, a versão B usa o ETF dos EUA.
+2. **FRDM (Ações EM) é intencional**, nas duas versões. Não há UCITS equivalente.
+3. **Systematic Trend:** DBMF na versão A e iMGP DBi Managed Futures UCITS ETF na versão B (mesma
+   estratégia em formatos diferentes).
+4. **Bitcoin: FBTC nas duas versões.** UCITS de uma só commodity não existe (limite de
+   diversificação do UCITS); o ETP europeu fica descartado.
+5. **UCITS em cota acumulada** (sem distribuição). Moeda: USD, para não introduzir câmbio no livro
+   em USD. Quando houver mais de uma linha de negociação, preferir a em USD.
+
+Por que duas versões: ETF listado nos EUA expõe o investidor residente fora dos EUA ao imposto de
+herança americano acima de ~US$ 60 mil (alíquota até 40%) e a 30% de retenção sobre dividendos sem
+tratado; o UCITS irlandês retém 15% sobre dividendos americanos e em geral não é ativo "situs" dos
+EUA. A inexistência de tratado EUA–Brasil é inferência, e o tratamento tributário no Brasil não foi
+pesquisado: confirmar com o tributarista.
+
+### Rascunho do catálogo
+
+| Classe | Proxy | Versão A (ETFs EUA) | Versão B (UCITS prioritário) |
+|---|---|---|---|
+| Ações EUA | S&P 500 TR | SPYM | CSPX ou VUAA |
+| Ações DM ex-EUA | MSCI EAFE | IEFA | UCITS a definir; sem UCITS, IEFA |
+| Ações EM | MSCI EM | FRDM | FRDM |
+| Imobiliário | FTSE EPRA Nareit Developed | RWO ou REET | TRET |
+| Ouro | `gold` (spot) | GLDM | SGLN/IGLN (ETC irlandês, não UCITS) |
+| Bitcoin | `bitcoin_usd` | FBTC | FBTC |
+| Systematic Trend | DBMF | DBMF | iMGP DBi Managed Futures UCITS |
+| Crédito HY | Bloomberg US Corp HY | USHY ou HYLB | IHYA |
+| Crédito IG | Bloomberg US Corp | SPBO ou LQD | VDPA |
+| Treasury curta | Bloomberg UST 1–3a | VGSH | IBTS |
+| Treasury longa | Bloomberg UST 7–10a | IEF | IBTM |
+| TIPS 0–5a | Bloomberg TIPS 0–5a | VTIP | UCITS a definir; sem UCITS 0–5, VTIP |
+| MBS | Bloomberg US MBS | MBB | MBB |
+
+Células com dois tickers e "a definir" saem da triagem.
+
+### Verificado (busca na web, 2026-11-26)
+
+- **FRDM:** TER 0,49%; segue o Life + Liberty Freedom 100 Emerging Markets Index (cerca de 100 ações,
+  ponderado por liberdade pessoal e econômica). Em junho de 2026: Coreia 21,5%, Chile 15,9%,
+  Taiwan 15,4%, Polônia 11,4%, EUA 10,9%, Brasil 8,4%. Não replica o MSCI EM.
+- **IALT** (iShares Systematic Alternatives Active ETF) é multiativo ativo (ações, crédito e macro),
+  TER 0,99%, benchmark em T-bill. Não é trend, e por isso não entra na classe.
+- **iMGP DBi Managed Futures Fund R USD UCITS ETF:** Luxemburgo, TER 0,75%, acumulação.
+- **Ouro físico:** SGLN/IGLN (iShares Physical Gold ETC) e SGLD (Invesco Physical Gold ETC), TER 0,12%,
+  ETCs irlandeses (não são UCITS).
+- **Bitcoin:** não há UCITS (limite de diversificação); o ETP europeu mais próximo é o BTCW da WisdomTree,
+  com taxa de 0,15% segundo a página do produto.
+
+### Risco de base do Ações EM (FRDM)
+
+A proxy de Ações EM é o MSCI EM (`msci_em_net_tr`), mas o instrumento é o FRDM, com composição bem diferente.
+Duas saídas: manter o MSCI EM como proxy estatístico e documentar o risco de base, ou usar a série do FRDM
+(só desde abril de 2022) ou uma mistura. A decisão depende de medir vol, correlação e beta do FRDM contra o
+MSCI EM desde 2022 (precisa dos preços do FRDM em `indicadores`).
+
+### Próximos passos
+
+1. Carregar os preços dos candidatos em `indicadores` (PC Bloomberg) e rodar a triagem: tracking
+   difference e correlação com a proxy, vol, TER, AUM e giro.
+2. Medir o risco de base do FRDM e decidir sobre a proxy de Ações EM.
+3. Campos de instrumento no Fibery (Classes de Ativo): ticker US e ticker UCITS (schema, manual).
+4. Hub: mostrar as duas versões por perfil (funcionalidade nova; plano antes do código).
