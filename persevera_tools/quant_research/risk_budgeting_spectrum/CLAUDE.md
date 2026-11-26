@@ -60,6 +60,9 @@ O código está em `risk_budgeting_spectrum/robustness.py`.
 - `stress.py`: estresse por janela, drawdown histórico da carteira atual e choque de vol e
   correlação (usado pela página do Hub);
   [estresse-e-drawdown.md](../../../docs/risk_budgeting_spectrum/estresse-e-drawdown.md).
+- `data_checks.py` + `scripts/rbs_checar_dados.py`: checa frescor, buracos, valores repetidos e extremos dos
+  proxies (só leitura); rodar antes de recalibrar/aprovar.
+  [checagem-dados.md](../../../docs/risk_budgeting_spectrum/checagem-dados.md).
 - Resultado-chave: o drawdown do P1 é do universo (março de 2020 deu −4,3% a −4,5% em todos os
   perfis Onshore); tetos de peso não o reduzem, e caixa não entra no modelo.
 

@@ -42,3 +42,4 @@ mostraram e o que ainda está em aberto.
 | [risk_budgeting_spectrum/calibracao.md](risk_budgeting_spectrum/calibracao.md) | Aprendizado | Calibração do Motor RBS no Fibery e problemas conhecidos |
 | [risk_budgeting_spectrum/offshore.md](risk_budgeting_spectrum/offshore.md) | Proposta (loader por livro neste PR) | RBS offshore em USD: decisões de desenho, classes, protótipo e campo Livro no Fibery |
 | [risk_budgeting_spectrum/estresse-e-drawdown.md](risk_budgeting_spectrum/estresse-e-drawdown.md) | Aprendizado | Estresse por janela, drawdown histórico da carteira atual e choque de vol e correlação por perfil (`stress.py`) |
+| [risk_budgeting_spectrum/checagem-dados.md](risk_budgeting_spectrum/checagem-dados.md) | Implementado | Checagem de frescor, buracos, valores repetidos e extremos das séries de proxy do RBS (`data_checks.py`, `scripts/rbs_checar_dados.py`); resultado de 2026-11-26. |
