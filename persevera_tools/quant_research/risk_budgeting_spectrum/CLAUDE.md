@@ -42,13 +42,23 @@ valor resolver, revisar os tetos de peso ou as vols; não aprovar com perfil ins
 registrar a decisão. Subir o teto de peso das ações não é o caminho (concentra o P10).
 
 Decisão de 2026-11-17: a checagem perturba também as correlações (`--sigma-corr`, padrão 0,10,
-z de Fisher). Com ela, σ máximo 9,5% no Onshore e 13% no Offshore (aplicados no Fibery;
-avaliacao-modelo.md, seção 12).
+z de Fisher). Com ela, o σ máximo caiu para 9,5% (Onshore) e 13% (Offshore) em 2026-11-17
+(avaliacao-modelo.md, seção 12); as calibrações de 2026-11-17 em vigor (Em Comitê) usam 11%
+nos dois livros e σ mínimo 2,2% (Onshore) e 2,0% (Offshore). Valores atuais: consulte o Fibery.
 
 Inputs: Default Vol = EWMA diária com λ = 0,995 (√252) e correlação semanal de longo prazo
 (15 anos), como a página Capital Market Assumptions do Hub. `scripts/rbs_conferir_inputs.py`
 recalcula os dois a partir de `indicadores` e compara com a calibração (precisa de banco).
 O código está em `risk_budgeting_spectrum/robustness.py`.
+
+## Análises sobre o modelo
+- `backtest.py` + `scripts/rbs_backtest.py`: walk-forward trimestral; resultados e limitações em
+  [backtest.md](../../../docs/risk_budgeting_spectrum/backtest.md).
+- `stress.py`: estresse por janela, drawdown histórico da carteira atual e choque de vol e
+  correlação (usado pela página do Hub);
+  [estresse-e-drawdown.md](../../../docs/risk_budgeting_spectrum/estresse-e-drawdown.md).
+- Resultado-chave: o drawdown do P1 é do universo (março de 2020 deu −4,3% a −4,5% em todos os
+  perfis Onshore); tetos de peso não o reduzem, e caixa não entra no modelo.
 
 ## Estado da calibração
 Problemas conhecidos e números da calibração atual ficam em

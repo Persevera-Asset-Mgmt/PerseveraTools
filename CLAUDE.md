@@ -32,6 +32,9 @@ renda fixa, pesquisa quant (factor investing, risk budgeting) e integrações
   máquina.
 
 ## Banco e n8n
+- **Câmbio em `indicadores`:** `brl_usd` = R$ por US$ (~5,8) e `usd_brl` = US$ por R$ (~0,17).
+  Os nomes parecem o contrário; confira a magnitude antes de usar (já causou erro no fator
+  câmbio do Peer Group do Hub).
 - Vários providers de `persevera_tools/data/providers` têm uma réplica em
   workflow do n8n que grava nas mesmas tabelas. Renomear tabela, mudar campo ou
   chave exige atualizar código **e** workflow. Mapa em
