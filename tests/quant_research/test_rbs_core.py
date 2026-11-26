@@ -71,6 +71,12 @@ def test_espectro_converge_e_respeita_restricoes():
         assert np.abs(r["rc_realized_bucket"][p] - r["rc_target_bucket"][p]).max() <= 1e-3
 
 
+def test_resultado_nao_traz_diagnostico_hrp():
+    r = build_spectrum(_config())
+    assert not {"w_hrp", "w_macro", "vol_hrp"} & set(r)
+    assert {"weights", "cov", "vols", "vol_targets", "risk_contrib", "converged_per_profile"} <= set(r)
+
+
 def test_sigma_inviavel_nao_converge_e_cai_em_penalidade():
     cfg = _config(sigma_max_pct=40.0)  # acima do que os Max Weight permitem
     with warnings.catch_warnings():
