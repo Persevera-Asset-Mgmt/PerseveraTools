@@ -1,7 +1,7 @@
 # RBS: avaliação do modelo com a calibração real (Onshore e Offshore)
 
 - **Status:** Aprendizado (medição; nada do motor foi alterado)
-- **Atualizado em:** 2026-11-17
+- **Atualizado em:** 2026-11-26 (seção 14: piso de peso mínimo unificado em 0,5%)
 - **Base:** "Calibração Onshore - 2026-10-14" (Rascunho), 13 classes, σ 1,9%–11,5%,
   10 perfis, peso mínimo 0,5% (seções 1 a 8); "Calibração Offshore - 2026-11-09"
   (Rascunho), 14 classes, σ 2%–14%, peso mínimo 2% (seção 9). Motor do PerseveraTools `main` @ `7f18df5`.
@@ -443,5 +443,31 @@ Observações:
   RC targets, curvaturas, RC Intra-Bucket, N Profiles e σ mínimo; são política do Comitê. O
   que falta é registrar por que os RC targets diferem entre os livros (Alternativos 25% no
   Onshore e 15% no Offshore; Renda Variável 70% e 80%).
-- **Opcional:** unificar o piso de peso mínimo em 1% (0,5% no Onshore e 2% no Offshore); efeito
-  só na composição (seção 12.2).
+- **Piso de peso mínimo:** unificado em 0,5% nos dois livros em 2026-11-26 (seção 14).
+
+## 14. Piso de peso mínimo unificado em 0,5% (2026-11-26)
+
+Decisão do usuário: Min Weight Threshold de **0,5% nos dois livros**. Gravado no Fibery em
+"Calibração Offshore - 2026-11-17" (Em Comitê), de 0,02 para 0,005; a Onshore já estava em 0,005.
+O Hub passou a receber o override desse limite em percentual (`limite_peso_pct`, PerseveraHub #61).
+
+Medido na calibração Offshore de 2026-11-17 (σ 2%–11%, 13 classes), mesmos inputs, só o piso muda:
+
+| Perfil | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P9 | P10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Mudança de composição (p.p.) | 0,0 | 2,2 | 6,3 | 8,6 | 13,5 | 3,5 | 0,0 | 0,0 | 0,0 | 0,0 |
+| Classes ativas (2% → 0,5%) | 7 → 7 | 13 → 9 | 8 → 11 | 9 → 13 | 8 → 12 | 10 → 12 | 11 → 11 | 10 → 10 | 9 → 9 | 8 → 8 |
+| Trend com 2% (%) | 3,8 | 3,9 | 6,5 | 8,5 | 10,9 | 7,0 | 3,7 | 0 | 5,4 | 0 |
+| Trend com 0,5% (%) | 3,8 | 4,9 | 4,1 | 4,8 | 5,6 | 6,5 | 3,7 | 0 | 5,4 | 0 |
+
+- Todos os perfis convergem em modo exato nos dois pisos e o σ realizado é idêntico: o piso só
+  muda a composição (confirma a seção 12.2).
+- **Histórico do estresse/drawdown no Hub:** o Trend usa o DBMF (desde 2019-06), e o "Histórico
+  desde" do Offshore é 2019-06 nos perfis com Trend. P8 e P10 não têm Trend em nenhum dos dois
+  pisos e por isso mostram 2010-08. O piso não muda essa data.
+- **Robustez (6 sorteios, vol e correlação perturbadas, semente 100):** P1 a P9 estáveis. O **P10 é
+  instável** (1 falha e 1 sorteio em modo penalidade), com piso de 0,5% e também com 2%: não vem do
+  piso, vem do σ máximo de 11% do Offshore.
+- **`--sugerir-sigma-max` (Offshore, piso 0,5%):** com σ máximo de **10,5%** nenhum perfil fica
+  instável (a 11% só o P10). É recomendação técnica; o σ máximo é política do Comitê e a calibração
+  segue com 11% e status "Em Comitê" até a decisão.
