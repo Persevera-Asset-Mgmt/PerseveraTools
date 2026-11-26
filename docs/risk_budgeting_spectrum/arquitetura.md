@@ -1,7 +1,7 @@
 # RBS: arquitetura ponta a ponta (Fibery → motor → Hub)
 
 - **Status:** Aprendizado (leitura do código e do Fibery, sem alteração de comportamento)
-- **Atualizado em:** 2026-11-17
+- **Atualizado em:** 2026-11-26
 - **Base lida:** PerseveraTools `main` @ `3781760`; PerseveraHub `main` (pin do
   Tools em `982c227`, v0.21.0, 2026-11-09); Fibery `perseveraasset.fibery.io`,
   space `Inv-Rsrch-Quant` (somente leitura).
@@ -106,7 +106,7 @@ Política de falha: explícita (`FiberyLoaderError`), sem fallback silencioso.
 ### 3.2 `build_spectrum(config)`
 
 1. **Covariância**: `Σ = D·ρ·D`, com `D = diag(vols)`.
-2. **HRP de 2 níveis (só diagnóstico)**: risk parity dentro de cada bucket, covariância macro derivada dos pesos intra-bucket, risk parity entre buckets (pesos macro entre 5% e 85%). Não participa da produção; o Hub deixou de exibi-lo em 2026-11-17 (a aba "Diagnóstico HRP" saiu), mas `build_spectrum` ainda o calcula e devolve.
+2. ~~**HRP de 2 níveis (só diagnóstico)**~~ Removido de `build_spectrum` em 2026-11-26 (`w_hrp`, `w_macro` e `vol_hrp` saíram do resultado, junto com `_compute_hrp`, `_solve_rp` e `_derive_macro_cov`). Nunca participou da otimização; o Hub já havia tirado a aba "Diagnóstico HRP" em 2026-11-17.
 3. **Curva de σ-alvo**: `σ(p) = σ_min · exp(k·(p−1))`, `k = ln(σ_max/σ_min)/(N−1)`. Crescimento exponencial entre perfis.
 4. **RC-target por bucket e perfil**: `f=(p−1)/(N−1)`, `g_b = f^γ_b`, `raw_b = (1−g_b)·RC_P1 + g_b·RC_P10`, renormalizado para somar 1. Os extremos são exatos; γ só afeta os intermediários. Com γ diferentes por bucket a soma bruta ≠ 1 e a renormalização muda o γ efetivo.
 5. **RC-target por classe**: RC do bucket dividido uniformemente entre as classes ou por `RC Intra-Bucket`.
@@ -116,7 +116,7 @@ Política de falha: explícita (`FiberyLoaderError`), sem fallback silencioso.
    - Estágio 1 `hard`: RC por bucket como igualdade. Se nenhum start produz solução factível, estágio 2 `penalty`: RC por bucket vira penalidade (peso 1e3), σ-alvo continua dura.
    - **Polish**: pesos < `Min Weight Threshold` são zerados e o problema reotimizado no conjunto ativo, mantendo as restrições do estágio vencedor; aceito só se continuar factível.
    - **Convergência** (`_is_converged`, avaliada na solução final): |Σw−1| ≤ 1e-6; pesos em [0, max]; |σ−σ-alvo| ≤ 5e-4 (0,05 p.p.); RC% ≤ Max RC + 1e-4; **RC por bucket dentro de 1e-3** do alvo.
-7. **Saída**: pesos, vol realizada (%), RC por classe e por bucket (alvo × realizado), `converged_per_profile`, `rc_mode_per_profile` ("hard"/"penalty"), HRP, covariância, config usada.
+7. **Saída**: pesos, vol realizada (%), RC por classe e por bucket (alvo × realizado), `converged_per_profile`, `rc_mode_per_profile` ("hard"/"penalty"), covariância, config usada.
 
 `compute_feasible_vol_range(config)` devolve (σ mín., σ máx.) viáveis; o máximo é não-convexo e usa um start por vértice de concentração.
 
@@ -189,7 +189,7 @@ Hub: `backend/tests/api/test_rbs_api.py`, `frontend/.../AlocacaoRbs.test.tsx`, `
 5. **`rc_mode_per_profile` não aparece na UI.** A tela só mostra "Convergiu Sim/Não"; distinguir `hard` de `penalty` exigiria expor o campo.
 6. **Casamento por nome.** O loader junta Parâmetros/RC/Correlação à calibração pelo `Name` (fórmula com livro e data). Renomear a calibração ou duas calibrações com o mesmo nome quebram a junção.
 7. **Correlação por classe depende de nomes únicos dentro do livro.** Ouro e Bitcoin existem nos dois livros; funciona porque o catálogo é filtrado por livro antes.
-8. **`intra_max_weight` nunca é preenchido** (loader fixa `None`; há um TODO), então o HRP intra-bucket não tem limite por classe.
+8. **`intra_max_weight` (e a propriedade `intra_bounds`) ficou sem uso**: só o HRP, removido em 2026-11-26, o lia. O loader fixa `None` (há um TODO); o campo pode sair da config e do Fibery numa limpeza futura.
 9. **Qualidade da calibração Onshore:** classes "RF Fundo Crédito GI/HY" sem proxy (Fonte = Premissa); correlações de Long & Short eram simuladas na calibração anterior (ver [calibracao.md](calibracao.md)) e não foi verificado se foram substituídas.
 
 ## 6. Divergências com os outros docs (para corrigir)
